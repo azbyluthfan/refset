@@ -32,7 +32,7 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@v9
         with:
           # Must be built with a Go version >= go.mod's; "latest" tracks new Go releases.
           version: latest
