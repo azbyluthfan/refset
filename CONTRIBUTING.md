@@ -1,0 +1,49 @@
+# Contributing to refset
+
+Thanks for your interest. refset is early and experimental, so issues that question the design are as welcome as code.
+
+## Ground rules
+
+- **The library module stays dependency-free.** The root `go.mod` must have no `require` lines, including test-only dependencies. Use the standard library (`testing`, `testing/quick`, fuzzing). Code that needs third-party packages belongs in `examples/` or `bench/`, which are separate modules. CI enforces this (`make check-deps`).
+- **Every change states which guarantee it affects.** The guarantees G1–G6 are defined in [docs/design.md §8](docs/design.md#8-test-plan). A change to behavior should come with a test that maps to one of them.
+- **Sources follow the contract.** A new example source must pass `refsettest.RunConformance` (see [docs/source-contract.md](docs/source-contract.md)).
+
+## Developer Certificate of Origin
+
+All commits must be signed off, certifying the [Developer Certificate of Origin](https://developercertificate.org/):
+
+```bash
+git commit -s -m "Describe the change"
+```
+
+This adds a `Signed-off-by: Your Name <you@example.com>` line. CI checks every commit in a pull request. To fix a commit you forgot to sign:
+
+```bash
+git commit --amend -s --no-edit
+```
+
+There is no CLA.
+
+## Development
+
+Requirements: Go 1.26 or newer. Docker is needed only for the Postgres example's tests.
+
+```bash
+make test        # unit tests
+make race        # tests with the race detector
+make lint        # golangci-lint (install from https://golangci-lint.run)
+make check-deps  # fails if the library module gained a dependency
+make ci          # everything CI runs for the library
+```
+
+`go.work` ties the library and the example modules together for local development. CI checks the library on its own with `GOWORK=off`.
+
+## Pull requests
+
+- Keep each pull request to one change.
+- Fill in the pull request template, including the guarantee section.
+- Run `make ci` before pushing.
+
+## Reporting security issues
+
+Please don't open a public issue. See [SECURITY.md](SECURITY.md).

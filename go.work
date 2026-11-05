@@ -1,0 +1,9 @@
+go 1.26
+
+// Local development across the library and its separate modules.
+// CI runs library jobs with GOWORK=off so the library module is checked on its own.
+use (
+	.
+	./bench
+	./examples
+)
