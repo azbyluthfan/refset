@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/azbyluthfan/refset"
@@ -81,4 +83,55 @@ func ExampleContextWithMinVersion() {
 	p, _, err := plans.GetCtx(ctx, "user-1")
 	fmt.Println(p.Tier, err)
 	// Output: pro <nil>
+}
+
+// Feed your own structs to refset: give it a function that loads every value
+// (your existing code that reads rows, calls an API or parses a file) and a
+// function that reports the current version. When the version moves, the
+// dataset reloads everything.
+func ExampleReloadSource() {
+	type Currency struct {
+		Code    string
+		RateUSD float64
+	}
+
+	// Your application's data: structs plus a version you bump on every change.
+	var mu sync.Mutex
+	version := uint64(1)
+	rows := []Currency{{"IDR", 0.000063}, {"EUR", 1.08}}
+
+	currencies, err := refset.Open(context.Background(), &refset.ReloadSource[string, Currency]{
+		Dataset: "currencies",
+		Load: func(context.Context) (uint64, []Currency, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return version, slices.Clone(rows), nil
+		},
+		Version: func(context.Context) (uint64, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return version, nil
+		},
+		Key: func(c Currency) string { return c.Code },
+	}, refset.Options{})
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = currencies.Close() }()
+
+	c, _ := currencies.Get("IDR")
+	fmt.Println(c.RateUSD)
+
+	// An admin changes a rate: update the structs and bump the version.
+	mu.Lock()
+	rows[0].RateUSD = 0.000061
+	version++
+	v := version
+	mu.Unlock()
+
+	c, _, _ = currencies.GetAtLeast(context.Background(), "IDR", v)
+	fmt.Println(c.RateUSD)
+	// Output:
+	// 6.3e-05
+	// 6.1e-05
 }

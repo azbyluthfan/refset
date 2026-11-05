@@ -171,6 +171,19 @@ func (m *model[K, V]) checkChanges(t *testing.T, after, head uint64, deltas []re
 	}
 }
 
+// checkReload handles a source that answered Changes(after) with
+// ErrSnapshotRequired instead of per-key changes, which the contract allows
+// (C4; refset.ReloadSource always does). The full snapshot it asks the dataset
+// to load must then be the state at the current head (C1, C3).
+func (m *model[K, V]) checkReload(t *testing.T, ctx context.Context, after, head uint64) {
+	t.Helper()
+	v, snap := load(t, ctx, m.h.Source)
+	if v != head || !m.h.mapsEqual(snap, m.states[head]) {
+		t.Fatalf("C1/C3: Changes(%d) asked for a reload, but LoadSnapshot = version %d %v, want version %d %v",
+			after, v, snap, head, m.states[head])
+	}
+}
+
 func randomOps[K comparable, V any](h Harness[K, V], rng *rand.Rand) []refset.Op[K, V] {
 	n := 1 + rng.IntN(3)
 	ops := make([]refset.Op[K, V], n)
@@ -211,6 +224,10 @@ func testSequential[K comparable, V any](t *testing.T, h Harness[K, V]) {
 	}
 	for after := m.first; after <= head; after++ {
 		got, deltas, err := h.Source.Changes(ctx, after)
+		if after < head && errors.Is(err, refset.ErrSnapshotRequired) {
+			m.checkReload(t, ctx, after, head)
+			continue
+		}
 		if err != nil {
 			t.Fatalf("Changes(%d): %v", after, err)
 		}
@@ -267,7 +284,12 @@ func testConcurrentWriters[K comparable, V any](t *testing.T, h Harness[K, V]) {
 		}
 		m.record(t, v, ops[v])
 	}
+	last := versions[len(versions)-1]
 	head, deltas, err := h.Source.Changes(ctx, m.first)
+	if errors.Is(err, refset.ErrSnapshotRequired) {
+		m.checkReload(t, ctx, m.first, last)
+		return
+	}
 	if err != nil {
 		t.Fatalf("Changes: %v", err)
 	}
@@ -307,18 +329,30 @@ func testDuringWrites[K comparable, V any](t *testing.T, h Harness[K, V]) {
 		snap   map[K]V
 		head   uint64
 		deltas []refset.Delta[K, V]
+		// For a source that answered ErrSnapshotRequired: the reload it asked for.
+		reloaded   bool
+		reloadV    uint64
+		reloadSnap map[K]V
 	}
 	var obs []observation
 	for range 20 {
 		v, snap := load(t, ctx, h.Source)
 		head, deltas, err := h.Source.Changes(ctx, v)
+		if errors.Is(err, refset.ErrSnapshotRequired) {
+			rv, rsnap := load(t, ctx, h.Source)
+			if rv < v {
+				t.Fatalf("C2: reload after ErrSnapshotRequired went from version %d back to %d", v, rv)
+			}
+			obs = append(obs, observation{snapV: v, snap: snap, reloaded: true, reloadV: rv, reloadSnap: rsnap})
+			continue
+		}
 		if err != nil {
 			t.Fatalf("Changes(%d): %v", v, err)
 		}
 		if head < v {
 			t.Fatalf("C3: Changes(%d) reported head %d below the snapshot version", v, head)
 		}
-		obs = append(obs, observation{v, snap, head, deltas})
+		obs = append(obs, observation{snapV: v, snap: snap, head: head, deltas: deltas})
 	}
 	close(stop)
 	if err := <-writerDone; err != nil {
@@ -331,6 +365,13 @@ func testDuringWrites[K comparable, V any](t *testing.T, h Harness[K, V]) {
 		want, ok := m.states[o.snapV]
 		if !ok || !h.mapsEqual(o.snap, want) {
 			t.Fatalf("C1: snapshot at version %d = %v, want %v", o.snapV, o.snap, want)
+		}
+		if o.reloaded {
+			want, ok := m.states[o.reloadV]
+			if !ok || !h.mapsEqual(o.reloadSnap, want) {
+				t.Fatalf("C1: reloaded snapshot at version %d = %v, want %v", o.reloadV, o.reloadSnap, want)
+			}
+			continue
 		}
 		m.checkChanges(t, o.snapV, o.head, o.deltas)
 	}

@@ -134,6 +134,10 @@ Supports G4.
 
 If a source's history is reset (database restored from a backup, tables recreated) its versions can go backwards. This is outside the contract and outside refset's guarantees. A source that can detect it (for example `head < after`) MUST return `ErrSnapshotRequired`; the dataset reloads and logs a warning, and its applied version may decrease. Writers and clients holding old version numbers may see `ErrVersionAhead` until the source's versions pass them again.
 
+## The simplest source
+
+`refset.ReloadSource` meets this contract from two functions you write: `Load` (every value and the version it reflects, read together: C1) and `Version` (the latest committed version: C3). Its `Changes` answers `ErrSnapshotRequired` whenever the version moved (C4), so the dataset reloads everything. You keep two promises: bump the version with every change, in the same transaction or under the same lock, and read it from the primary copy of the data.
+
 ## Checking a source
 
 ```go
@@ -163,5 +167,7 @@ The suite checks, each as a named subtest:
 | `C4/history_reset` | `Changes` after a version beyond the head returns `ErrSnapshotRequired` |
 | `C5/watch` | Notifications never exceed the head; the channel closes on cancellation (skipped if `Watch` returns an error) |
 | `C6/key_loader` | `LoadKey` returns the latest value, reports deletes, and is safe for concurrent use (skipped without `KeyLoader`) |
+
+A source may answer `Changes` with `ErrSnapshotRequired` instead of per-key changes (as `ReloadSource` always does); the suite then checks that the full snapshot it asks for is exactly the state at the current head.
 
 The suite is itself tested against deliberately broken sources (one that loses a delta, one that drops a key from its snapshot, one that ignores a history reset) to make sure it fails them.

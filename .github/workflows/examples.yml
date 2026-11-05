@@ -62,3 +62,6 @@ jobs:
           go run ./currencies
           go run ./plan-upgrade
           go run ./baseline-lru
+          go run ./structs
+          go run ./httpjson
+          go run ./dbrows

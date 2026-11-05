@@ -40,6 +40,8 @@ make demo       # billing + two API replicas over real HTTP and Postgres (needs 
    replica C  Refset-Min-Version: plans=3     -> 200 advanced report               in 58ms
 ```
 
+More examples, and which one to read for your situation: [examples/README.md](examples/README.md).
+
 ## Usage
 
 ```bash
@@ -72,10 +74,22 @@ mux.Handle("/reports", refsethttp.Middleware(reportsHandler))
 
 Browsers can carry versions in cookies instead, and versions can be HMAC-signed so clients can't forge them: see `refsethttp.Config`.
 
-**Sources.** A source implements four methods: `Name`, `LoadSnapshot`, `Changes` and `Watch` (plus optional `LoadKey` for the fallback). What they must guarantee is the [Source contract](docs/source-contract.md); `refsettest.RunConformance` checks any implementation. Two examples ship in [examples/](examples):
+**Your own data.** refset doesn't talk to databases itself. You tell it where the data comes from. The simplest way is `refset.ReloadSource`: give it your existing code that loads structs, plus a cheap "current version" function, and it reloads the dataset whenever the version moves:
 
-- [`pgsource`](examples/pgsource): PostgreSQL. Writers use `pgsource.Write`, which versions and logs each change in the same transaction; replicas re-read changed rows at exactly the logged version; `NOTIFY` wakes them up. Optional triggers capture writes made with plain SQL.
-- [`filesource`](examples/filesource): a JSON snapshot and an append-only change file.
+```go
+plans, err := refset.Open(ctx, &refset.ReloadSource[string, Plan]{
+    Dataset: "plans",
+    Load:    store.LoadPlans,  // func(ctx) (version uint64, []Plan, error): your query, API call or file
+    Version: store.Version,    // func(ctx) (uint64, error): bumped on every change
+    Key:     func(p Plan) string { return p.ID },
+}, refset.Options{})
+```
+
+Bump the version in the same transaction (or under the same lock) as each change.
+
+Every change reloads the whole dataset, which suits most reference data. For large datasets that change often, implement the full `Source` interface (`Name`, `LoadSnapshot`, `Changes`, `Watch`, optional `LoadKey`) with per-key changes, as the Postgres example does. What any source must guarantee is the [Source contract](docs/source-contract.md); `refsettest.RunConformance` checks an implementation.
+
+**Examples:** [examples/README.md](examples/README.md) says which one to read for your situation: structs in memory, your own SQL, another service's API, Postgres with per-key changes, or writing your own source.
 
 ## How it works
 

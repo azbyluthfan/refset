@@ -76,6 +76,8 @@ Everything inside a replica process except the `Source` implementation is refset
 
 The library's boundary with the outside world. Specified in `docs/source-contract.md` and checked by `refsettest.RunConformance(t, factory)`, which any source (in-memory, Postgres example, file example, third-party) can run.
 
+The simplest compliant source is `refset.ReloadSource`, built from two of the application's own functions: `Load` (every value plus the version it reflects) and `Version` (the current version, cheaply). Its `Changes` never returns per-key changes; when the version moves it returns `ErrSnapshotRequired` and the dataset reloads everything. That suits most reference data and needs no changelog, tables or adapter. The `structs`, `dbrows` and `httpjson` examples use it.
+
 ```go
 type Source[K comparable, V any] interface {
     Name() string
@@ -291,11 +293,11 @@ There are no functional options. `Options` is a plain, non-generic struct (like 
 
 Packages in the library module (all stdlib only):
 
-- `refset`: core dataset, snapshots, waiters, staleness, context helpers.
+- `refset`: core dataset, snapshots, waiters, staleness, context helpers, and `ReloadSource` (a source built from a load function and a version function).
 - `refset/refsettest`: `MemSource` with controllable delays, drops, partitions, errors and compaction; `FakeClock` (monotonic and wall readings move independently); `RunConformance`.
 - `refset/refsethttp`: header and cookie helpers and middleware.
 
-Outside the library (separate modules, any dependencies): `examples/` (including `pgsource`, `filesource`) and `bench/`.
+Outside the library (separate modules, any dependencies): `examples/` (including `pgsource`, `filesource`, and the `ReloadSource` examples `structs`, `dbrows`, `httpjson`) and `bench/`.
 
 ## 6. Usage Examples
 
@@ -477,6 +479,7 @@ refset/
   examples/                   # separate go.mod; may use any dependency
     pgsource/                 # reference Postgres Source, Write, schema, triggers
     filesource/               # JSON snapshot + append-only change file
+    structs/ dbrows/ httpjson/ # ReloadSource over app structs, app SQL, a JSON API
     currencies/               # 6.1
     plan-upgrade/             # 6.2: billing + two replicas + Postgres, docker compose
     baseline-lru/             # same scenario with golang-lru, showing the stale answer
