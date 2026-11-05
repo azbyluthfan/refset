@@ -1,0 +1,75 @@
+name: Release
+
+# Push a tag like v0.1.0 to release. The library is a Go module, so there are
+# no binaries: the release runs the full suite and publishes notes taken from
+# CHANGELOG.md. pkg.go.dev picks the tag up from the module proxy.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+env:
+  GOWORK: "off"
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: refset
+          POSTGRES_PASSWORD: refset
+          POSTGRES_DB: refset
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U refset"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.x"
+      - name: Zero dependencies in the library module
+        run: ./scripts/check-zero-deps.sh
+      - name: Library tests
+        run: go test -race -count=1 ./...
+      - name: Examples tests
+        working-directory: examples
+        env:
+          REFSET_PG_URL: postgres://refset:refset@localhost:5432/refset?sslmode=disable
+        run: go test -race -count=1 ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  release:
+    name: GitHub release
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "CHANGELOG.md has no section for [$version]" >&2
+            exit 1
+          fi
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""
+          case "$GITHUB_REF_NAME" in v0.*|*-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md $prerelease

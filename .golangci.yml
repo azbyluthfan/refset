@@ -1,0 +1,38 @@
+version: "2"
+
+run:
+  tests: true
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - errorlint   # wrap and compare errors correctly (errors.Is / errors.As)
+    - gocritic
+    - misspell
+    - revive
+    - unconvert
+    - unparam
+    - copyloopvar
+    - nolintlint
+  settings:
+    misspell:
+      locale: US
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    revive:
+      rules:
+        - name: context-as-argument
+          arguments:
+            - allowTypesBefore: "*testing.T"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes:
+        - github.com/azbyluthfan/refset

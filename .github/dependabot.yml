@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # The library module has no dependencies by design; only workflow actions
+  # and the separate examples module are tracked.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /examples
+    schedule:
+      interval: weekly

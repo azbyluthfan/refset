@@ -1,0 +1,23 @@
+# Test and coverage output
+*.test
+*.out
+coverage.*
+/bin/
+
+# Fuzz corpora generated locally (committed seeds live in testdata/fuzz)
+/**/testdata/fuzz/*/cache
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local workspace overrides
+go.work.sum
+
+# Internal working notes, kept locally and not published
+/PLAN.md
+/docs/landscape.md
+/docs/soak.md
+/docs/soak-*.log

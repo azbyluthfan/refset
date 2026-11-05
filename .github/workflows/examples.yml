@@ -1,0 +1,64 @@
+name: Examples
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: examples-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOWORK: "off"
+  REFSET_PG_URL: postgres://refset:refset@localhost:5432/refset?sslmode=disable
+
+# Separate from the library's CI: a broken example never blocks a library change.
+jobs:
+  examples:
+    name: Examples (Postgres ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["15", "17"]
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: refset
+          POSTGRES_PASSWORD: refset
+          POSTGRES_DB: refset
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U refset"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    defaults:
+      run:
+        working-directory: examples
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.27.x"
+      - name: go vet
+        run: go vet ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+          working-directory: examples
+          args: --config ../.golangci.yml
+      - name: Test (pgsource conformance and integration, filesource)
+        run: go test -race ./...
+      - name: Run the demos
+        run: |
+          go run ./currencies
+          go run ./plan-upgrade
+          go run ./baseline-lru
