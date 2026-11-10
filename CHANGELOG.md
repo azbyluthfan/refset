@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-11
+
+First release. Experimental: the API may change before v1.0.
+
 ### Added
 
 - Repository scaffolding, CI, design document and source contract.

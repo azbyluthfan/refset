@@ -118,7 +118,7 @@ Details: [guarantees](docs/guarantees.md) · [performance and memory](docs/perfo
 
 ## Status
 
-Experimental, heading for v0.1.0. The API may change before v1.0. See the [CHANGELOG](CHANGELOG.md) and the [roadmap](docs/roadmap.md).
+Experimental. v0.1.0 is the first release, and the API may change before v1.0. See the [CHANGELOG](CHANGELOG.md) and the [roadmap](docs/roadmap.md).
 
 ## Documentation
 
