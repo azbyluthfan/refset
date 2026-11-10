@@ -29,10 +29,18 @@ git tag -s vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
-Use `-a` instead of `-s` if you don't sign tags. Then watch the `Release` run in the Actions tab.
+`-s` signs the tag so GitHub shows it as Verified. With an SSH key registered on GitHub as a signing key, point Git at it once (no GPG needed):
+
+```bash
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+```
+
+Use `-a` instead of `-s` for an unsigned tag. Then watch the `Release` run in the Actions tab.
 
 ## After the release
 
 - Check the release page and `https://pkg.go.dev/github.com/azbyluthfan/refset@vX.Y.Z`.
+- Set the refset `require` line in `examples/go.mod` and `bench/go.mod` to the new version (they keep their `replace`, so this only records which release they were last checked with), and check the examples still build without the `replace`.
 - Move finished items in [roadmap.md](roadmap.md).
 - If a published version is broken, don't delete it: the module proxy keeps it forever. Release a fix, and add a `retract` directive for the bad version to `go.mod` in that release.

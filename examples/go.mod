@@ -2,11 +2,13 @@ module github.com/azbyluthfan/refset/examples
 
 go 1.26
 
-// The examples always build against the library in this repository.
+// Built against the library in this repository, so examples always match the
+// code next to them. The require line names the release they were last checked
+// with; without the replace they build against that release.
 replace github.com/azbyluthfan/refset => ../
 
 require (
-	github.com/azbyluthfan/refset v0.0.0-00010101000000-000000000000
+	github.com/azbyluthfan/refset v0.1.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jackc/pgx/v5 v5.12.0
 )

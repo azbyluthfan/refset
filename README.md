@@ -44,9 +44,96 @@ More examples, and which one to read for your situation: [examples/README.md](ex
 
 ## Usage
 
+Requires Go 1.26 or newer. Install the latest release:
+
 ```bash
-go get github.com/azbyluthfan/refset
+go get github.com/azbyluthfan/refset@latest
 ```
+
+| Package | Import path | For |
+|---|---|---|
+| `refset` | `github.com/azbyluthfan/refset` | datasets, sources, version-aware reads |
+| `refsethttp` | `github.com/azbyluthfan/refset/refsethttp` | carrying versions over HTTP (headers, cookies, signing) |
+| `refsettest` | `github.com/azbyluthfan/refset/refsettest` | tests: in-memory source with faults, fake clock, `RunConformance` |
+
+All three are in one module with no dependencies. While refset is at v0.x, a minor release may change the API; the [CHANGELOG](CHANGELOG.md) says what to change.
+
+**Quick start.** A complete program: your own code holds plans and a version, and refset serves them from memory.
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"sync"
+
+	"github.com/azbyluthfan/refset"
+)
+
+type Plan struct{ ID, Name string }
+
+// store is your own code: plans plus a version bumped on every change.
+type store struct {
+	mu      sync.Mutex
+	version uint64
+	plans   []Plan
+}
+
+func (s *store) Load(context.Context) (uint64, []Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.version, append([]Plan(nil), s.plans...), nil
+}
+
+func (s *store) Version(context.Context) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.version, nil
+}
+
+func (s *store) Set(p Plan) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.plans {
+		if s.plans[i].ID == p.ID {
+			s.plans[i] = p
+		}
+	}
+	s.version++
+	return s.version
+}
+
+func main() {
+	ctx := context.Background()
+	s := &store{version: 1, plans: []Plan{{"u1", "Free"}}}
+
+	plans, err := refset.Open(ctx, &refset.ReloadSource[string, Plan]{
+		Dataset: "plans",
+		Load:    s.Load,
+		Version: s.Version,
+		Key:     func(p Plan) string { return p.ID },
+	}, refset.Options{})
+	if err != nil {
+		log.Fatal(err) // source unreachable: don't start with empty data
+	}
+	defer plans.Close()
+
+	p, _ := plans.Get("u1")
+	fmt.Println("before:", p.Name) // Free
+
+	v := s.Set(Plan{"u1", "Pro"})
+	// A request that carries the writer's version waits for it.
+	p, _, err = plans.GetAtLeast(ctx, "u1", v)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("after:", p.Name) // Pro
+}
+```
+
+The sections below show each part in a real service.
 
 **Reading** (every API replica):
 
@@ -65,6 +152,8 @@ perms, ok, err := permissions.GetFresh(userID)    // ErrTooStale if this replica
 **Carrying versions over HTTP** (`refsethttp`, standard library only):
 
 ```go
+import "github.com/azbyluthfan/refset/refsethttp"
+
 // Writer (billing), after committing:
 refsethttp.SetVersion(w, "plans", version) // Refset-Version: plans=51
 
@@ -89,7 +178,7 @@ Bump the version in the same transaction (or under the same lock) as each change
 
 Every change reloads the whole dataset, which suits most reference data. For large datasets that change often, implement the full `Source` interface (`Name`, `LoadSnapshot`, `Changes`, `Watch`, optional `LoadKey`) with per-key changes, as the Postgres example does. What any source must guarantee is the [Source contract](docs/source-contract.md); `refsettest.RunConformance` checks an implementation.
 
-**Examples:** [examples/README.md](examples/README.md) says which one to read for your situation: structs in memory, your own SQL, another service's API, Postgres with per-key changes, or writing your own source.
+**Examples:** [examples/README.md](examples/README.md) says which one to read for your situation: structs in memory, your own SQL, another service's API, Postgres with per-key changes, or writing your own source. The examples on `main` track the latest code; to read them as they were in a release, browse that tag (for example [v0.1.0](https://github.com/azbyluthfan/refset/tree/v0.1.0/examples)).
 
 ## How it works
 
