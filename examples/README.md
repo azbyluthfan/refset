@@ -55,7 +55,21 @@ Shortcuts from the repository root:
 
 ## Using an example in your project
 
-The examples aren't published as a library: `pgsource` and `filesource` are references to copy and adapt. Before relying on your own source, check it with the conformance suite:
+The examples aren't published as a library: `pgsource` and `filesource` are references to copy and adapt. In this repository they build against the library next to them (a `replace` in `go.mod`), so the examples on `main` may use changes that aren't released yet. To work from a release, take them from its tag, for example [v0.1.0](https://github.com/azbyluthfan/refset/tree/v0.1.0/examples).
+
+To use one in your own module:
+
+1. Add refset, and the example's own dependencies (only `pgsource` and the Postgres programs need pgx):
+
+   ```bash
+   go get github.com/azbyluthfan/refset@latest
+   go get github.com/jackc/pgx/v5
+   ```
+
+2. Copy the package directory (for example `pgsource/`) into your module, and change its import path wherever you use it.
+3. Keep its tests: they are the quickest way to see your copy still meets the contract after you change it.
+
+Before relying on your own source, check it with the conformance suite:
 
 ```go
 refsettest.RunConformance(t, func(t *testing.T) refsettest.Harness[string, Plan] { ... })
