@@ -8,19 +8,20 @@ Nothing here is a promise of dates. Items move up when users ask for them; open 
 
 | Area | State |
 |---|---|
-| Repository, CI, landscape notes, Source contract | Done |
+| Repository, CI, Source contract | Done |
 | Core library (`Dataset`, copy-on-write shards, waiters, staleness) | Done |
 | Test kit (`refsettest`, conformance suite, in-process scenarios) | Done |
 | HTTP propagation (`refsethttp`) | Done |
 | Examples (`pgsource`, `filesource`, demos) | Done |
 | Docs, benchmarks, 1-hour soak | Done |
 | `ReloadSource` and the `structs` / `dbrows` / `httpjson` examples | Done |
-| **v0.1.0 release** | **Next:** confirm CI is green on GitHub, tag, announce |
+| Pipelines: CI, examples, weekly (soak, fuzzing, govulncheck, newest Go and Postgres), release | Done, green on GitHub |
+| **v0.1.0 release** | **Next:** tag, announce |
 
 ## v0.1.0: first release
 
-- Confirm `ci.yml` and `examples.yml` are green on GitHub for the current `main`.
-- Tag `v0.1.0` (the release workflow publishes the CHANGELOG section).
+- ~~Confirm `ci.yml` and `examples.yml` are green on GitHub for `main`.~~ Done 2026-11-11, along with a first run of `weekly.yml`.
+- Tag `v0.1.0`; the release workflow checks the tag, runs the full suite, publishes the CHANGELOG section and the module proxy picks it up ([releasing.md](releasing.md)).
 - Announce on the Go forum, r/golang and Gophers Slack.
 
 ## Performance track
