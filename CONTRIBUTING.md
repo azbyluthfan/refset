@@ -37,6 +37,8 @@ make ci          # everything CI runs for the library
 make fuzz        # every fuzz target, 30s each (FUZZTIME=5m for longer)
 make soak        # replicas under random faults, 10 minutes (SOAK_DURATION=1h)
 make vulncheck   # govulncheck on the library, examples and bench modules
+make perfreport  # latency, GC and memory under load, as Markdown (about 10 minutes)
+make bench-compare  # core benchmarks: latest release vs your working tree
 ```
 
 `go.work` ties the library and the example modules together for local development. CI checks the library on its own with `GOWORK=off`.

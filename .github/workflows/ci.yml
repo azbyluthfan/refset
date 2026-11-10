@@ -63,6 +63,12 @@ jobs:
         run: go test -race -shuffle=on -coverprofile=coverage.out -covermode=atomic ./...
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -n 1
+      - name: Bench module builds and perfreport runs (smoke test)
+        if: matrix.go == '1.27.x'
+        working-directory: bench
+        run: |
+          go vet ./...
+          go run ./perfreport -quick > /dev/null
       - name: Upload coverage
         if: matrix.go == '1.27.x'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

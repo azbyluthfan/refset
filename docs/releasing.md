@@ -16,7 +16,7 @@ The project follows [Semantic Versioning](https://semver.org/). Until v1.0.0, a 
 ## Before tagging
 
 1. **Weekly run is green.** Run `weekly` from the Actions tab ("Run workflow") on the commit you will tag, or check the latest scheduled run. It covers what the release itself doesn't: the soak, long fuzzing and the newest Go and Postgres.
-2. **Benchmarks, if the core changed.** Run the comparisons in [benchmarks.md](benchmarks.md) and update it if anything moved. Before a minor release, also run a 1-hour soak locally (`make soak SOAK_DURATION=1h`) and update the soak section of [benchmarks.md](benchmarks.md).
+2. **Benchmarks, if the core changed.** Run `make bench-compare` (core benchmarks of the last release against the working tree) and `make perfreport` (latency, GC and memory under load), and update [benchmarks.md](benchmarks.md) if anything moved. Before a minor release, also run a 1-hour soak locally (`make soak SOAK_DURATION=1h`) and update the soak section of [benchmarks.md](benchmarks.md).
 3. **CHANGELOG.md.** Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and add an empty `## [Unreleased]` above it. Breaking changes go under a `### Changed` heading that says what to change in calling code.
 4. **Docs.** Check that the README, [roadmap.md](roadmap.md) and godoc examples match the release.
 5. Merge that through a pull request, like any other change.

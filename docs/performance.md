@@ -25,6 +25,15 @@ Code can't choose what the CPU caches. The hardware loads whole cache lines (64 
 | R7 | A reload builds the new copy beside the old one | **Budget memory for two copies.** At about 100 bytes per entry (string key, small value), 1M entries is ~100 MB, so ~200 MB during a reload |
 | R8 | Hash maps defeat prefetching and cost GC scanning | A flat, pointer-light layout is a post-v0.1 option for very large datasets. GC pauses at 1M entries were already only tens of microseconds |
 
+## Garbage collection
+
+refset adds GC work in two ways ([measurements](benchmarks.md#garbage-collection)):
+
+- **Changes.** Each change copies the shards it touches, and the old copies become garbage. With the default 256 shards at 1M entries, that is ~370 KB per change: 11% of a core at 1,000 changes a second, 1% at 100. Raising `Options.Shards` (below) cuts it in proportion. A full reload allocates a whole new copy.
+- **Holding the data.** Every GC cycle marks the whole live heap, dataset included. With the application allocating 100 MB/s, holding 100k–1M entries cost 1–5% of a core, the same as holding them in a plain map. Go sizes its heap goal from the live heap, so a larger dataset means fewer, larger collections.
+
+Pauses stayed under 0.4 ms in every measurement. If GC CPU matters, measure your service with `GODEBUG=gctrace=1` or `runtime/metrics` before tuning.
+
 ## Choosing `Options.Shards`
 
 | Entries | Suggested `Shards` |

@@ -16,13 +16,9 @@ Nothing here is a promise of dates. Items move up when users ask for them; open 
 | Docs, benchmarks, 1-hour soak | Done |
 | `ReloadSource` and the `structs` / `dbrows` / `httpjson` examples | Done |
 | Pipelines: CI, examples, weekly (soak, fuzzing, govulncheck, newest Go and Postgres), release | Done, green on GitHub |
-| **v0.1.0 release** | **Next:** tag, announce |
-
-## v0.1.0: first release
-
-- ~~Confirm `ci.yml` and `examples.yml` are green on GitHub for `main`.~~ Done 2026-11-11, along with a first run of `weekly.yml`.
-- Tag `v0.1.0`; the release workflow checks the tag, runs the full suite, publishes the CHANGELOG section and the module proxy picks it up ([releasing.md](releasing.md)).
-- Announce on the Go forum, r/golang and Gophers Slack.
+| **v0.1.0** | **Released 2026-11-11** ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.1.0), [pkg.go.dev](https://pkg.go.dev/github.com/azbyluthfan/refset)) |
+| Performance P0: measure latency, GC and memory | Done ([benchmarks](benchmarks.md#latency-gc-and-memory-under-load)) |
+| **Performance P1** | **Next** |
 
 ## Performance track
 
@@ -32,42 +28,41 @@ refset trades along three axes, and an improvement on one often costs another:
 - **GC time:** the CPU the garbage collector spends because of refset, both scanning the live dataset and collecting the shards each change throws away. Pause times are only part of this.
 - **Memory footprint:** bytes per entry in steady state, and the peak during a reload (two full copies today).
 
-### Known today
+### Known today (measured in P0)
+
+Apple M1, default options, string keys and a 24-byte value. Full tables in [benchmarks.md](benchmarks.md#latency-gc-and-memory-under-load).
 
 | Axis | Measured | Gap |
 |---|---|---|
-| Read latency | 24 ns serial / 4.8 ns parallel at 10k entries; 136 ns serial at 1M | Each read hashes the key twice: 8–36 ns slower than a locked map on one core. Only means are measured, no p99 |
-| Propagation latency | Not measured | Every notification waits `BatchWindow` (5 ms) before polling, even when nothing else is arriving |
-| GC time | Pause p50 23 µs, max 44 µs at 1M entries, idle | GC CPU share, mark work and assist time are not measured, and nothing is measured while changes are applied or during a reload |
-| Garbage per change | 221 KB for 1 key at 1M entries with the default 256 shards (50 KB with 4096) | Default shard count is about 10× too low at 1M entries |
-| Memory | 101 B per entry, same as a plain map | A reload holds two full copies. `ReloadSource` reloads everything on *every* change, so each change costs a full copy of garbage and a 2× peak |
+| Read latency | 26–36 ns per read up to 100k entries, ~185 ns at 1M (memory-bound); p99.9 per 16 reads stays at 3–7 µs up to 100k under writes and reloads, where a locked map's doubles | None that matters at these sizes. Single-core reads still hash each key twice (8–36 ns slower than a locked map) |
+| Propagation latency | Notification: 5.0 ms p50, nearly all of it the fixed `BatchWindow`. Read-your-writes: 76 µs p50, but p99 ~1 ms and max 6.4 ms | The batch window delays isolated changes, and read-your-writes waits for it when the notification arrives first |
+| GC, write path | At 1M entries, ~370 KB of garbage per one-key change with 256 shards: 11% of a core at 1,000 changes/s (1% at 100/s). Pauses < 0.2 ms | Default shard count is too low for large datasets |
+| GC, reloads | A full reload at 1M allocates 190 MB, 1.7× a presized map | Shards grow from empty on every load |
+| GC, holding data | 1–5% of a core at 100 MB/s of application allocation, the same as a map | Small; pointer-free storage could save at most this |
+| Memory | Within 10% of a plain map per entry (100 B at 1M); a reload peaks at 1.9× the steady heap | The reload peak, every time for `ReloadSource` |
 
-### Phase P0: measure all three axes (before changing anything)
+### Phase P0: measure all three axes (done 2026-11-11)
 
-The current benchmarks report means and idle GC pauses. Optimising GC time or tail latency needs numbers for them first.
-
-- **Tail read latency:** p50 / p99 / p99.9 of `Get` while the loop applies changes and while a reload swaps in, at 10k, 100k and 1M entries.
-- **Propagation latency:** commit → visible on a replica, with notifications and with polling only.
-- **GC cost under churn:** GC CPU share (from `runtime/metrics`), GC cycles per second, mark assist time and pauses, at 0, 10, 100 and 1,000 changes per second, and during a reload. Compared with a locked map receiving the same writes.
-- **Memory:** steady live heap, peak heap during a reload, bytes per entry for a few key and value types.
-- Extend `bench/memreport` into a `bench/perfreport` that prints all of the above. Library code stays stdlib-only.
-- Add a before-release comparison against the last release's numbers (benchstat in the `bench/` module), so regressions are visible.
-
-**Exit:** `docs/benchmarks.md` has a table per axis, and every later item below states its effect in those tables.
+- `bench/perfreport` (`make perfreport`): read latency percentiles while idle, applying changes and reloading; commit-to-visible latency by notification, read-your-writes, polling and full reload; GC CPU, cycles, allocation and pauses at 0–1,000 changes/s, on reloads, and while the application allocates; bytes per entry for three key/value types and the heap peak during a reload. Each next to a locked map receiving the same writes.
+- `scripts/bench-compare.sh` (`make bench-compare`): core benchmarks of the latest release against the working tree with benchstat, alternating runs; part of the release checklist.
+- CI builds the `bench` module and smoke-runs perfreport, so the tool keeps working.
 
 ### Phase P1: quick wins (v0.2)
 
-| Item | Latency | GC time | Memory | Notes |
+Ordered by measured effect. Each item is re-measured with perfreport against the P0 tables.
+
+| Item | Latency | GC time | Memory | Target from P0 |
 |---|---|---|---|---|
-| **Automatic shard count** at `Open`: ≈ 2.5 × √entries, rounded to a power of two; `Options.Shards` stays as an override | apply 10× faster at 1M | 14× less garbage per change at 1M | 0 | Already measured (100-key batch at 1M: 2.6 ms → 263 µs, 18 MB → 1.3 MB). Re-size on reload if the dataset has grown a lot |
-| **Adaptive batch window**: apply the first notification at once, batch only when changes keep arriving | up to −5 ms propagation | slightly more applies under bursts | 0 | Keeps batching where it saves work, removes the fixed delay where it doesn't |
-| **Diff-on-reload** for `ReloadSource` and full reloads: compare loaded entries with the current snapshot and apply only what changed, reusing untouched shards | same | far less garbage per reload | peak drops from 2× toward 1× + changed shards | Needs `V` comparable or an `Equal` func; falls back to today's full swap otherwise. Also the basis of the reconcile check below |
-| **Apply counters** in `Stats()`: shards copied and bytes copied per apply | 0 | 0 | 0 | Lets users see whether their shard count fits |
-| **GC tuning guide** in `docs/performance.md`: `GOGC`, `GOMEMLIMIT` and how a large long-lived dataset changes when GC runs | 0 | user-side | user-side | Docs only |
+| **Automatic shard count** at `Open` and on reload: ≈ 2.5 × √entries, rounded to a power of two; `Options.Shards` stays as an override | faster applies at 1M | far less garbage per change | 0 | 1M, 1,000 changes/s: 370 MB/s and 11% of a core → a few MB/s and ~1% |
+| **Adaptive batch window**: apply the first notification at once, batch only when changes keep arriving | −5 ms propagation | slightly more applies under bursts | 0 | Notification p50 5.0 ms → under 0.5 ms; read-your-writes max 6.4 ms → under 1 ms |
+| **Pre-size shards on reload** from the current entry count | faster reloads | less garbage per reload | 0 | 1M reload: 190 MB → about a presized map's 113 MB |
+| **Diff-on-reload** for `ReloadSource` and full reloads: keep the current shard where its contents didn't change | same | far less garbage when little changed | peak drops toward 1× + changed shards | 1M reload peak 1.9× steady → close to 1× when few entries changed. Needs `V` comparable or an `Equal` func; falls back to a full swap otherwise. Basis of the reconcile check below |
+| **Apply counters** in `Stats()`: shards and bytes copied | 0 | 0 | 0 | Lets users see whether their shard count fits |
+| **GC tuning guide** in `docs/performance.md`: `GOGC`, `GOMEMLIMIT`, and how a large long-lived dataset changes when GC runs | 0 | user-side | user-side | Docs only |
 
 ### Phase P2: storage layout (v0.3, opt-in, gated on P0 numbers)
 
-These change how shards store data, so they are done together, behind an option, and only if P0 shows GC time or single-core latency matters at realistic sizes.
+These change how shards store data, so they are done together, behind an option, and only if a real workload shows they matter. P0 says they don't yet: reads are already flat under load, and the GC cost of holding a dataset was 1–5% of a core, the same as a map's.
 
 | Item | Latency | GC time | Memory | Cost |
 |---|---|---|---|---|
