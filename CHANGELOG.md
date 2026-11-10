@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- `bench/perfreport` (`make perfreport`): read latency percentiles under writes and reloads, commit-to-visible latency, GC CPU and allocation under writes and while the application allocates, memory per entry and the reload peak, each next to a locked map. Results in docs/benchmarks.md.
+- `scripts/bench-compare.sh` (`make bench-compare`): compares core benchmarks between the latest release and the working tree with benchstat.
+
 ### Changed
 
 - Package documentation: a getting-started example, and links that work on pkg.go.dev.

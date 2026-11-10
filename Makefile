@@ -5,7 +5,7 @@ export GOWORK := off
 GO ?= go
 PKGS := ./...
 
-.PHONY: all ci test race cover bench vet fmt fmt-check lint check-deps vulncheck fuzz soak examples pg-up pg-down demo demo-lru
+.PHONY: all ci test race cover bench vet fmt fmt-check lint check-deps vulncheck fuzz soak perfreport bench-compare examples pg-up pg-down demo demo-lru
 
 all: ci
 
@@ -28,6 +28,14 @@ cover:
 ## bench: run benchmarks in the library module (comparisons live in bench/)
 bench:
 	$(GO) test -run='^$$' -bench=. -benchmem $(PKGS)
+
+## perfreport: latency, GC and memory report as Markdown (about 10 minutes; see docs/benchmarks.md)
+perfreport:
+	cd bench && $(GO) run ./perfreport $(PERFFLAGS)
+
+## bench-compare: core benchmarks of the latest release vs the working tree, with benchstat
+bench-compare:
+	./scripts/bench-compare.sh $(BASE)
 
 ## vet: go vet
 vet:

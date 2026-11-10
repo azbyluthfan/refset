@@ -10,6 +10,8 @@ Sanity checks, not competitive claims (design §8.7). Measured on 2026-11-05.
 cd bench && go test -run '^$' -bench . -count 3     # Get comparisons, value size
 go test -run '^$' -bench 'ApplyDeltas|Open|GetParallel' .   # in the repo root
 cd bench && go run ./memreport                      # memory per entry, GC pauses
+make perfreport                                     # latency, GC and memory under load (about 10 minutes)
+make bench-compare                                  # core benchmarks: latest release vs working tree
 ```
 
 Reads use string keys (`"key-123"`) visited in a random order, so hardware prefetching doesn't flatter any implementation. "Serial" is one goroutine; "parallel" is all 8 cores (`b.RunParallel`), and its ns/op is aggregate throughput (total time ÷ total reads), not per-read latency.
@@ -96,6 +98,128 @@ This is the in-process cost only. A real source adds its own read time: transfer
 | refset, 256 shards | 101 | 22.7 µs | 44.0 µs |
 
 Sharding adds no measurable memory per entry, and GC pauses stay in the tens of microseconds. Remember that a reload briefly holds two copies (rule R7).
+
+## Latency, GC and memory under load
+
+`make perfreport` (`bench/perfreport`) measures the three axes the [roadmap](roadmap.md) tracks, next to a map behind a `sync.RWMutex` that receives the same writes. Measured on 2026-11-11, same machine, default options (256 shards, 5 ms `BatchWindow`), string keys and a 24-byte value. Writes go through a minimal in-memory source, so the numbers show refset's costs rather than the source's.
+
+### Read latency
+
+4 reader goroutines time batches of 16 random reads for 3 s per cell; percentiles are per batch, so p50 ÷ 16 is the typical cost of one read and any stall (GC pause, lock wait, cache flush after a swap) shows in full in the tail. "1,000 changes/s" writes one key per change; "full reload every 1s" makes every change a full reload, as `ReloadSource` does.
+
+| Entries | Load | Store | p50 | p99 | p99.9 | per read (p50) |
+|---|---|---|---|---|---|---|
+| 10k | idle | refset | 416 ns | 528 ns | 2.7 µs | 26 ns |
+| 10k | idle | RWMutex map | 3.2 µs | 7.4 µs | 15.9 µs | 200 ns |
+| 10k | 1,000 changes/s | refset | 456 ns | 1.2 µs | 2.9 µs | 28 ns |
+| 10k | 1,000 changes/s | RWMutex map | 3.3 µs | 7.7 µs | 30.2 µs | 204 ns |
+| 10k | full reload every 1s | refset | 416 ns | 1.3 µs | 2.9 µs | 26 ns |
+| 10k | full reload every 1s | RWMutex map | 3.3 µs | 6.4 µs | 15.6 µs | 204 ns |
+| 100k | idle | refset | 528 ns | 3.9 µs | 6.9 µs | 33 ns |
+| 100k | idle | RWMutex map | 3.1 µs | 7.3 µs | 16.9 µs | 196 ns |
+| 100k | 1,000 changes/s | refset | 576 ns | 3.4 µs | 5.6 µs | 36 ns |
+| 100k | 1,000 changes/s | RWMutex map | 3.2 µs | 12.3 µs | 58.4 µs | 200 ns |
+| 100k | full reload every 1s | refset | 576 ns | 3.5 µs | 7.2 µs | 36 ns |
+| 100k | full reload every 1s | RWMutex map | 3.2 µs | 8.4 µs | 27.1 µs | 200 ns |
+| 1M | idle | refset | 3.0 µs | 7.3 µs | 27.6 µs | 188 ns |
+| 1M | idle | RWMutex map | 3.3 µs | 7.4 µs | 16.9 µs | 204 ns |
+| 1M | 1,000 changes/s | refset | 2.9 µs | 7.0 µs | 15.9 µs | 184 ns |
+| 1M | 1,000 changes/s | RWMutex map | 3.3 µs | 9.7 µs | 32.8 µs | 208 ns |
+| 1M | full reload every 1s | refset | 2.9 µs | 6.9 µs | 15.9 µs | 184 ns |
+| 1M | full reload every 1s | RWMutex map | 3.4 µs | 9.5 µs | 16.9 µs | 212 ns |
+
+- **Writes and reloads don't move refset's read tail.** Up to 100k entries, refset's p99.9 stays at 3–7 µs per 16 reads whatever the load. The locked map's p99.9 doubles or more under writes (16.9 → 58.4 µs at 100k), because readers queue behind each write lock.
+- **With 4 readers, the locked map costs ~200 ns per read at every size**: the shared reader count is contended (the [comparison above](#reads-compared-with-alternatives) shows the same with 8 cores). refset reads cost 26–36 ns up to 100k entries.
+- **At 1M entries both are memory-bound** (~185–210 ns per read), and refset no longer has a clear edge on the median.
+- The maximum of a cell is a single sample over 3 s and comes mostly from OS scheduling; reruns of the same cell ranged from 0.2 to 80 ms for both stores, so it is left out.
+
+### Propagation latency
+
+100k entries, 200 changes per case, each followed by a random gap so changes don't line up with polls. Time from the source committing a change until the replica serves it.
+
+| Path | p50 | p99 | max |
+|---|---|---|---|
+| Notification (default `BatchWindow` 5 ms) | 5.0 ms | 5.4 ms | 7.0 ms |
+| Read-your-writes: `GetAtLeast(version)` | 76 µs | 983 µs | 6.4 ms |
+| Polling only, `PollInterval` 100 ms | 42 ms | 99 ms | 100 ms |
+| Notification, full reload per change | 15.5 ms | 17.8 ms | 19.6 ms |
+
+- **A notified change waits the whole batch window.** The poll itself takes well under 0.1 ms, so the fixed 5 ms `BatchWindow` is nearly all of the delay when changes arrive one at a time.
+- **Read-your-writes is fast, with a tail from the same window.** A request asking for a version above the known head starts a poll at once (76 µs). When the notification has already raised the known head, the request doesn't start a poll and waits for the batch timer: that is the p99 and max.
+- **Polling alone** takes half a poll interval on average, as expected.
+- **A full reload per change** at 100k entries costs the batch window plus about 10 ms of loading.
+
+### Garbage collection
+
+No readers; each cell runs 5 s. GC CPU is the runtime's estimate (`runtime/metrics`) excluding idle-time marking, as a share of one core; pauses are histogram bucket upper bounds.
+
+| Entries | Writes | Store | GC CPU | GC cycles/s | Allocated/s | Pause p99 |
+|---|---|---|---|---|---|---|
+| 100k | 10/s | refset | 0.0% | 0.0 | 225 KB | 0 |
+| 100k | 100/s | refset | 0.2% | 0.2 | 2.3 MB | 115 µs |
+| 100k | 1,000/s | refset | 1.8% | 1.8 | 21.1 MB | 131 µs |
+| 100k | 1/s, full reload each | refset | 0.4% | 0.6 | 10.6 MB | 82 µs |
+| 100k | 1/s, full reload each | RWMutex map | 0.4% | 0.4 | 7.2 MB | 82 µs |
+| 1M | 10/s | refset | 0.0% | 0.0 | 3.7 MB | 0 |
+| 1M | 100/s | refset | 1.0% | 0.2 | 37.7 MB | 131 µs |
+| 1M | 1,000/s | refset | 11.3% | 2.4 | 370.5 MB | 197 µs |
+| 1M | 1/s, full reload each | refset | 3.9% | 1.0 | 190.1 MB | 82 µs |
+| 1M | 1/s, full reload each | RWMutex map | 2.6% | 0.6 | 113.4 MB | 82 µs |
+
+The locked map updated in place allocates nothing at any write rate, so it has no GC cost (rows omitted), and with no writes neither store allocates.
+
+- **Each change costs a copy of the shards it touches.** With the default 256 shards, a one-key change at 1M entries copies a ~4k-entry shard (~370 KB of garbage). At 1,000 changes/s that is 370 MB/s and 11% of a core in GC; at 100k entries, 21 MB/s and 1.8%. Pauses stay under 0.2 ms.
+- **A full reload allocates 1.7× more than building one map** (190 vs 113 MB per reload at 1M): refset grows 256 shard maps from empty, while the rebuilt map is created at its final size.
+
+Holding a dataset also costs the GC when the application allocates: every cycle the application's garbage triggers marks the whole live heap, the dataset included. Here the application allocates 100 MB/s and the dataset receives no writes:
+
+| Entries | Held | GC CPU | GC cycles/s | Pause p99 |
+|---|---|---|---|---|
+| 100k | nothing | 2.0% | 29.4 | 164 µs |
+| 100k | refset | 6.8% | 9.0 | 229 µs |
+| 100k | RWMutex map | 7.1% | 8.4 | 262 µs |
+| 1M | nothing | 1.9% | 29.4 | 197 µs |
+| 1M | refset | 3.8% | 0.8 | 393 µs |
+| 1M | RWMutex map | 2.8% | 0.6 | 98 µs |
+
+- **Holding the data costs 1–5% of a core** at this allocation rate, the same for refset and a map. Go sizes its heap goal from the live heap, so a larger dataset means fewer, bigger collections rather than more work per second.
+
+### Memory
+
+Bytes per entry are the live heap after GC, counting dataset storage only (keys and pointed-to values are shared with the source).
+
+| Entries | Key, value | refset | map | refset ÷ map |
+|---|---|---|---|---|
+| 10k | string, 24-byte struct | 72 B | 79 B | 0.91 |
+| 10k | int64, int64 | 32 B | 30 B | 1.09 |
+| 10k | string, pointer to struct | 47 B | 44 B | 1.09 |
+| 100k | string, 24-byte struct | 56 B | 63 B | 0.89 |
+| 100k | int64, int64 | 25 B | 24 B | 1.04 |
+| 100k | string, pointer to struct | 35 B | 35 B | 1.00 |
+| 1M | string, 24-byte struct | 100 B | 101 B | 1.00 |
+| 1M | int64, int64 | 38 B | 38 B | 1.00 |
+| 1M | string, pointer to struct | 56 B | 56 B | 1.00 |
+
+Heap during one full reload: steady is the whole process after GC; peak is the highest heap sampled every millisecond until the new version is served, garbage included. Reload time includes the 5 ms batch window.
+
+| Entries | Steady heap | Peak during reload | Peak ÷ steady | Reload time |
+|---|---|---|---|---|
+| 100k | 10.9 MB | 21.0 MB | 1.92 | 13.4 ms |
+| 1M | 149.5 MB | 282.7 MB | 1.89 | 203.4 ms |
+
+- **Sharding costs no memory**: refset's storage is within 10% of a plain map at every size, sometimes smaller (smaller maps leave less unused space when they grow).
+- **A reload nearly doubles the heap** until the new version is served (rule R7). At 10k entries the reload finishes between samples, so it isn't listed.
+
+### What this means for the roadmap
+
+| Axis | Finding | Next step |
+|---|---|---|
+| Read latency | Already flat under writes and reloads; memory-bound at 1M | No change needed for latency alone |
+| Propagation | The fixed 5 ms batch window is almost all of the delay, and adds a tail to read-your-writes | Adaptive batch window |
+| GC, write path | At 1M entries the default shard count makes each change ~370 KB of garbage: 11% of a core at 1,000 changes/s | Automatic shard count |
+| GC, reloads | Reloads allocate 1.7× a presized map and peak at 1.9× the heap | Pre-size shards on reload; diff-on-reload |
+| GC, holding data | 1–5% of a core at 100 MB/s of application allocation, same as a map | Pointer-free storage would save at most this; keep it gated |
+| Memory | Same as a map; reload peak is the only overhead | Diff-on-reload |
 
 ## Soak test
 
