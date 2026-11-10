@@ -591,13 +591,13 @@ Every push: lint (including the zero-requires check and DCO), unit, property, ra
 
 ## 9. Roadmap
 
-Planned after v0.1: automatic shard sizing, avoiding the double key hash on reads, a reconcile check that detects unlogged changes, an optional local snapshot file for faster restarts, a pointer-light layout for very large datasets, metrics adapters built on `Stats()`, more example sources, gRPC helpers, and promoting `pgsource` to an official `refsetpg` module once there is demand.
+Kept current in [roadmap.md](roadmap.md). Planned after v0.1: a performance track that first measures tail latency, propagation latency, GC CPU under churn and reload memory peak, then automatic shard sizing, an adaptive batch window, diff-on-reload (less garbage and a lower memory peak for full reloads), avoiding the double key hash on reads, a reconcile check that detects unlogged changes, an optional local snapshot file for faster restarts, a pointer-light layout for very large datasets, metrics adapters built on `Stats()`, more example sources, gRPC helpers, and promoting `pgsource` to an official `refsetpg` module once there is demand.
 
 ## 10. Risks and Open Questions
 
 | Risk | Mitigation |
 |---|---|
-| A maintained Go library already does this | Landscape check in M0; if found, reposition around version-aware reads and the staleness policy, or contribute there |
+| A maintained Go library already does this | Landscape checked before v0.1; if one appears, reposition around version-aware reads and the staleness policy, or contribute there |
 | Users write sources that break the contract | Written contract plus `RunConformance`; guarantees documented as conditional on the contract |
 | Users apply refset to frequently written or per-user data | "When not to use refset" section and modelling guidance (§4.9) |
 | Callers mutate shared values | Read-only rule documented on every read API; race tests; godoc example of the safe pattern |

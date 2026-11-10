@@ -118,7 +118,7 @@ Details: [guarantees](docs/guarantees.md) · [performance and memory](docs/perfo
 
 ## Status
 
-Experimental, heading for v0.1.0. The API may change before v1.0. See the [CHANGELOG](CHANGELOG.md).
+Experimental, heading for v0.1.0. The API may change before v1.0. See the [CHANGELOG](CHANGELOG.md) and the [roadmap](docs/roadmap.md).
 
 ## Documentation
 
@@ -126,6 +126,7 @@ Experimental, heading for v0.1.0. The API may change before v1.0. See the [CHANG
 - [Guarantees](docs/guarantees.md): what is and isn't promised, staleness and memory behavior
 - [Source contract](docs/source-contract.md): what a `Source` must guarantee
 - [Performance and memory](docs/performance.md) and [benchmarks](docs/benchmarks.md)
+- [Roadmap](docs/roadmap.md): what comes after v0.1.0
 
 ## Contributing
 

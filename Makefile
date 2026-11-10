@@ -25,7 +25,7 @@ cover:
 	$(GO) test -race -coverprofile=coverage.out -covermode=atomic $(PKGS)
 	$(GO) tool cover -func=coverage.out | tail -n 1
 
-## bench: run benchmarks in the library module (comparisons live in bench/, M5)
+## bench: run benchmarks in the library module (comparisons live in bench/)
 bench:
 	$(GO) test -run='^$$' -bench=. -benchmem $(PKGS)
 

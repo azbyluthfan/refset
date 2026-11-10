@@ -301,7 +301,7 @@ func TestUndeclaredDatasetRollsBack(t *testing.T) {
 	}
 }
 
-// D8: writers declaring overlapping datasets in different orders never
+// Writers declaring overlapping datasets in different orders never
 // deadlock; declared but untouched datasets keep their version.
 func TestMultiDatasetWrites(t *testing.T) {
 	p := testPool(t)
@@ -397,7 +397,7 @@ func (t tracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQue
 }
 func (tracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-// Review feedback 2: a dataset built from a join stays correct when the joined
+// A dataset built from a join stays correct when the joined
 // table changes, by writer-logged keys, by LogReloadAll, or by a reload trigger.
 func TestJoinDerivedDataset(t *testing.T) {
 	p := testPool(t)
@@ -524,7 +524,7 @@ func TestTriggerCapture(t *testing.T) {
 	}
 }
 
-// Review feedback 5: trigger mode can deadlock; Postgres aborts one writer
+// Trigger mode can deadlock; Postgres aborts one writer
 // with 40P01, the retry succeeds, and replicas stay correct.
 func TestTriggerModeDeadlockIsRetryable(t *testing.T) {
 	p := testPool(t)
