@@ -12,7 +12,7 @@ import (
 )
 
 func rootFrom(l layout, shards int, version uint64, m map[int]int) *root[int, int] {
-	r := &root[int, int]{version: version, shards: emptyShards[int, int](shards)}
+	r := &root[int, int]{version: version, l: l, shards: emptyShards[int, int](shards)}
 	for k, v := range m {
 		r.shards[shardOf(l, k)][k] = v
 		r.n++
@@ -36,7 +36,7 @@ func TestApplyCopiesOnlyTouchedShards(t *testing.T) {
 		initial[i] = i
 	}
 	cur := rootFrom(l, 16, 1, initial)
-	next := applyDeltas(l, cur, 2, []Delta[int, int]{{Version: 2, Ops: []Op[int, int]{{Key: 7, Value: 70}}}})
+	next, _ := applyDeltas(cur, 2, []Delta[int, int]{{Version: 2, Ops: []Op[int, int]{{Key: 7, Value: 70}}}})
 
 	changed := 0
 	for i := range cur.shards {
@@ -59,7 +59,7 @@ func TestApplyCopiesOnlyTouchedShards(t *testing.T) {
 func TestApplySkipsDuplicateDeltas(t *testing.T) {
 	l := newLayout(4)
 	cur := rootFrom(l, 4, 5, map[int]int{1: 1})
-	next := applyDeltas(l, cur, 6, []Delta[int, int]{
+	next, _ := applyDeltas(cur, 6, []Delta[int, int]{
 		{Version: 4, Ops: []Op[int, int]{{Key: 1, Value: 999}}},
 		{Version: 5, Ops: []Op[int, int]{{Key: 2, Value: 999}}},
 		{Version: 6, Ops: []Op[int, int]{{Key: 3, Value: 3}, {Key: 1, Delete: true}}},
@@ -99,7 +99,7 @@ func TestOptionsResolve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.shards != 256 || c.batchWindow != 5*time.Millisecond || c.waitBound != 50*time.Millisecond ||
+	if c.shards != 0 || c.batchWindow != 5*time.Millisecond || c.waitBound != 50*time.Millisecond ||
 		c.pollInterval != time.Second || c.clock == nil || c.log == nil {
 		t.Fatalf("defaults: %+v", c)
 	}
@@ -220,7 +220,7 @@ func FuzzApplyDeltas(f *testing.F) {
 	f.Add([]byte{0x11, 0x91, 0x22, 0xa2, 0x33, 0xb3})
 	f.Fuzz(func(t *testing.T, data []byte) {
 		l := newLayout(4)
-		cur := &root[int, int]{shards: emptyShards[int, int](4)}
+		cur := &root[int, int]{l: l, shards: emptyShards[int, int](4)}
 		model := make(map[int]int)
 		var all []Delta[int, int]
 		var pending []Delta[int, int]
@@ -238,14 +238,14 @@ func FuzzApplyDeltas(f *testing.F) {
 				model[op.Key] = op.Value
 			}
 			if b&0x80 != 0 { // flush a batch, re-delivering everything seen so far
-				cur = applyDeltas(l, cur, version, all)
+				cur, _ = applyDeltas(cur, version, all)
 				pending = nil
 				if got := contents(cur); !maps.Equal(got, model) || cur.n != len(model) {
 					t.Fatalf("at v%d: got %v (n=%d), want %v", version, got, cur.n, model)
 				}
 			}
 		}
-		cur = applyDeltas(l, cur, version, pending)
+		cur, _ = applyDeltas(cur, version, pending)
 		if got := contents(cur); !maps.Equal(got, model) || cur.n != len(model) || cur.version != version {
 			t.Fatalf("final: got %v (n=%d, v=%d), want %v (v=%d)", got, cur.n, cur.version, model, version)
 		}

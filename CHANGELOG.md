@@ -8,8 +8,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - `bench/perfreport` (`make perfreport`): read latency percentiles under writes and reloads, commit-to-visible latency, GC CPU and allocation under writes and while the application allocates, memory per entry and the reload peak, each next to a locked map. Results in docs/benchmarks.md.
 - `scripts/bench-compare.sh` (`make bench-compare`): compares core benchmarks between the latest release and the working tree with benchstat.
+- Full reloads keep unchanged shards: when values can be compared (`==` for comparable types without interfaces, or the new `ReloadSource.Equal`), a shard whose entries all came back unchanged is kept from the current version instead of rebuilt. A reload that changes little, which is every reload with `ReloadSource`, now allocates little and no longer doubles memory.
+- `Stats` reports `Shards`, `Applies`, `ShardsCopied`, `EntriesCopied` and `ShardsKept`, to judge the copy-on-write cost.
 
 ### Changed
+
+- **`Options.Shards` 0 now means automatic** (was 256): about 2.5 × √entries rounded up to a power of two, chosen at `Open` and again when a full reload finds the size has moved a lot. Datasets around 10k entries keep 256; large ones get more and copy far less per change. Set `Shards` to keep a fixed count.
+- **Adaptive batch window:** a notification after a quiet period is applied at once instead of after `BatchWindow`; only notifications within `BatchWindow` of the last poll are batched. Reads waiting for a version (`GetAtLeast`, `GetCtx`) now poll at once even when a notification already announced the version.
+- Full reloads create shard maps at their expected size instead of growing them.
 
 - Package documentation: a getting-started example, and links that work on pkg.go.dev.
 - README: Go version requirement, import paths of the three packages, and a complete quick-start program.

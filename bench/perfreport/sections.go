@@ -238,6 +238,7 @@ func gcSection(cfg config) {
 				t.close()
 			}
 			runtime.KeepAlive(t)
+			runtime.KeepAlive(appSink)
 			fmt.Printf("| %s | %s | %.1f%% | %.1f | %s | %s |\n", fmtN(n), store,
 				100*d.gcCores, float64(d.cycles)/d.wall.Seconds(), fmtDur(d.assist), fmtDur(d.pauseP99))
 		}
@@ -249,7 +250,7 @@ const (
 	appAllocs    = 1000      // allocations per second
 )
 
-// appSink keeps simulated application allocations from being optimised away.
+// appSink keeps simulated application allocations from being optimized away.
 var appSink []byte
 
 // memSection measures steady memory per entry and the heap peak during a

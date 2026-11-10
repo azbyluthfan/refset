@@ -74,7 +74,7 @@ Time and garbage to apply one batch, by dataset size, shard count and keys chang
 | 1,000,000 | 256 (default) | 32 µs | 221 KB | 2.6 ms | 18 MB |
 | 1,000,000 | **4096** | **8.5 µs** | 50 KB | **263 µs** | 1.3 MB |
 
-A batch copies the shard slice (8 bytes per shard) plus every shard it touches (entries ÷ shards each). Too few shards make each copy big; too many make the slice copy dominate small batches. **The default of 256 is right around 10k–100k entries but about 10× too few at 1M entries.** For large datasets, set `Options.Shards`: roughly 1024 at 100k entries and 4096 at 1M (about 2.5 × √entries, rounded up to a power of two). Choosing it automatically from the dataset size is planned.
+A batch copies the shard slice (8 bytes per shard) plus every shard it touches (entries ÷ shards each). Too few shards make each copy big; too many make the slice copy dominate small batches. **A fixed 256 is right around 10k–100k entries but about 10× too few at 1M entries.** These measurements led to the automatic shard count (`Options.Shards` 0): about 2.5 × √entries rounded up to a power of two, capped at 512 below 200k entries to keep reads fast, so 4096 at 1M ([performance](performance.md#choosing-optionsshards)).
 
 ## Startup (full load)
 
@@ -220,6 +220,36 @@ Heap during one full reload: steady is the whole process after GC; peak is the h
 | GC, reloads | Reloads allocate 1.7× a presized map and peak at 1.9× the heap | Pre-size shards on reload; diff-on-reload |
 | GC, holding data | 1–5% of a core at 100 MB/s of application allocation, same as a map | Pointer-free storage would save at most this; keep it gated |
 | Memory | Same as a map; reload peak is the only overhead | Diff-on-reload |
+
+## After the P1 changes
+
+The same `make perfreport` run on the P1 code (automatic shard count, adaptive batch window, pre-sized and diffed reloads), 2026-11-11, same machine and defaults. Only rows that changed are shown; the tables above are the baseline.
+
+| Measure | Before (P0) | After (P1) |
+|---|---|---|
+| Notification → visible, p50 / max | 5.0 ms / 7.0 ms | 70 µs / 179 µs |
+| Read-your-writes `GetAtLeast`, p50 / max | 76 µs / 6.4 ms | 88 µs / 338 µs |
+| Full reload per change, p50 (100k) | 15.5 ms | 11.0 ms |
+| 1M entries, 1,000 changes/s: allocated, GC CPU | 370 MB/s, 11.3% | 27.9 MB/s, 0.8% |
+| 100k entries, 1,000 changes/s: allocated, GC CPU | 21.1 MB/s, 1.8% | 11.8 MB/s, 1.0% |
+| 1M entries, full reload (one entry changed): allocated, GC CPU | 190 MB, 3.9% | 16.8 MB, 0.0% |
+| 100k entries, full reload (one entry changed): allocated | 10.6 MB | 1.6 MB |
+| Heap peak during a reload, ÷ steady (1M / 100k) | 1.89 / 1.92 | 1.12 / 1.14 |
+| Bytes per entry, 1M, string key + 24-byte struct | 100 B | 90 B |
+| Read p50 per read, 10k / 100k / 1M | 26 / 33–36 / 184–188 ns | 28 / 36–39 / 184 ns |
+
+- **Propagation** no longer waits for the batch window when changes arrive one at a time, and read-your-writes no longer waits for it in the tail.
+- **Write garbage** at 1M entries fell 13× because the automatic shard count is 4096 there. At 100k it is capped at 512, which halves the garbage while keeping reads as fast as with 256.
+- **Reloads that change little** keep every unchanged shard. What remains (16.8 MB at 1M) is mostly the list of matching keys kept while loading, freed when the reload finishes.
+- **Reads** are unchanged within noise. An earlier rule without the cap (1024 shards at 100k) made 100k-entry reads 7.5% slower:
+
+| 100k entries, one core | 256 shards | 512 | 1024 | 4096 |
+|---|---|---|---|---|
+| ns per read | 32.0 | 32.4 | 34.2 | 39.9 |
+
+At 250k and 500k entries, 256, 1024 and 2048 shards read within noise of each other (97–98 ns and 127–130 ns): reads there come from main memory.
+
+`Open` also got faster: `make bench-compare` against v0.1.0 shows 38–40% less time and 10–28% fewer bytes allocated at 100k and 1M entries, because shards are created at their final size.
 
 ## Soak test
 

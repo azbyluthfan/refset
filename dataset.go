@@ -31,7 +31,8 @@ type Dataset[K comparable, V any] struct {
 	// Read-hot: read by every Get. Set at Open; root changes only when a new
 	// version is applied, which readers must observe anyway.
 	root     atomic.Pointer[root[K, V]]
-	l        layout
+	base     layout            // hash seed; each root carries its own shard count
+	eq       func(a, b V) bool // compares values on reloads; nil turns diffing off
 	cfg      config
 	src      Source[K, V]
 	loader   KeyLoader[K, V] // nil if src doesn't implement KeyLoader
@@ -53,6 +54,10 @@ type Dataset[K comparable, V any] struct {
 	pollErrors    atomic.Uint64
 	reloads       atomic.Uint64
 	fallbacks     atomic.Uint64
+	applies       atomic.Uint64
+	shardsCopied  atomic.Uint64
+	entriesCopied atomic.Uint64
+	shardsKept    atomic.Uint64
 	_             cacheLinePad
 
 	// Written by waiting reads and the loop under mu.
@@ -80,7 +85,8 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 		src:      src,
 		name:     src.Name(),
 		cfg:      cfg,
-		l:        newLayout(cfg.shards),
+		base:     newLayout(1),
+		eq:       equalFor(src),
 		kick:     make(chan struct{}, 1),
 		flights:  newFlights[K, V](cfg.maxFallbacks),
 		loopDone: make(chan struct{}),
@@ -90,7 +96,7 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 		d.loader = kl
 	}
 	start := cfg.clock.Now()
-	r, err := d.load(ctx)
+	r, _, err := d.load(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("refset: open dataset %q: %w", d.name, err)
 	}
@@ -117,7 +123,7 @@ func (d *Dataset[K, V]) Version() uint64 { return d.root.Load().version }
 
 // Snapshot returns an immutable view of the current version.
 func (d *Dataset[K, V]) Snapshot() Snapshot[K, V] {
-	return Snapshot[K, V]{r: d.root.Load(), l: d.l}
+	return Snapshot[K, V]{r: d.root.Load()}
 }
 
 // Read path (design §4.11, rule R1): Get, Snapshot, GetFresh, and GetAtLeast /
@@ -128,8 +134,7 @@ func (d *Dataset[K, V]) Snapshot() Snapshot[K, V] {
 // Get returns the value for key from the current version. It never waits and
 // never fails; use GetAtLeast, GetCtx or GetFresh when freshness matters.
 func (d *Dataset[K, V]) Get(key K) (V, bool) {
-	v, ok := d.root.Load().shards[shardOf(d.l, key)][key]
-	return v, ok
+	return d.root.Load().get(key)
 }
 
 // GetAtLeast returns the value for key at version minVersion or newer.
@@ -241,18 +246,19 @@ func (d *Dataset[K, V]) register(minVersion uint64) (*waiter, error) {
 		return nil, nil
 	}
 	w := &waiter{min: minVersion, ch: make(chan error, 1)}
-	kick := minVersion > d.knownHead.Load()
-	if kick {
+	if minVersion > d.knownHead.Load() {
+		// Unknown version: ErrVersionAhead needs a poll that starts after
+		// this request (design §4.5).
 		w.needSeq = d.pollsStarted + 1
 	}
 	heap.Push(&d.waiters, w)
 	d.mu.Unlock()
 
-	if kick {
-		select {
-		case d.kick <- struct{}{}:
-		default: // a poll is already queued; it serves this request too
-		}
+	// Ask for a poll now even if a notification already announced the
+	// version, rather than wait for a batched poll.
+	select {
+	case d.kick <- struct{}{}:
+	default: // a poll is already queued; it serves this request too
 	}
 	return w, nil
 }
@@ -274,36 +280,20 @@ func (d *Dataset[K, V]) fallback(ctx context.Context, key K) (V, bool, error) {
 	})
 }
 
-// load reads a full snapshot from the source into fresh shards.
-func (d *Dataset[K, V]) load(ctx context.Context) (*root[K, V], error) {
-	shards := emptyShards[K, V](d.cfg.shards)
-	n := 0
-	version, err := d.src.LoadSnapshot(ctx, func(k K, v V) {
-		m := shards[shardOf(d.l, k)]
-		if _, ok := m[k]; !ok {
-			n++
-		}
-		m[k] = v
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &root[K, V]{version: version, shards: shards, n: n}, nil
-}
-
 // loop is the only goroutine that calls Changes and LoadSnapshot after Open,
 // and the only writer of d.root.
 func (d *Dataset[K, V]) loop(watch <-chan uint64) {
 	defer close(d.loopDone)
 	clock := d.cfg.clock
 
-	// failedAt is the monotonic time of the last failed refresh, if failed.
-	var failed bool
-	var failedAt int64
+	// lastStart is the monotonic start time of the last refresh, if any;
+	// failed says whether it failed.
+	var refreshed, failed bool
+	var lastStart int64
 	refresh := func(full bool) {
 		start := clock.Now().MonoNanos
 		failed = !d.refresh(full)
-		failedAt = start
+		refreshed, lastStart = true, start
 	}
 
 	tick := clock.NewTimer(d.cfg.pollInterval)
@@ -312,6 +302,12 @@ func (d *Dataset[K, V]) loop(watch <-chan uint64) {
 	if d.cfg.reloadInterval > 0 {
 		reload = clock.NewTimer(d.cfg.reloadInterval)
 		reloadC = reload.C()
+	}
+	stopBatch := func() {
+		if batchC != nil {
+			batch.Stop()
+			batchC = nil
+		}
 	}
 	defer func() {
 		tick.Stop()
@@ -336,10 +332,20 @@ func (d *Dataset[K, V]) loop(watch <-chan uint64) {
 				continue
 			}
 			d.raiseHead(v)
-			if v > d.root.Load().version && batchC == nil {
-				batch = clock.NewTimer(d.cfg.batchWindow)
-				batchC = batch.C()
+			if v <= d.root.Load().version || batchC != nil {
+				continue // already applied, or a batched poll is pending
 			}
+			// Adaptive batching: poll at once unless the last poll was less
+			// than BatchWindow ago; then wait out the rest of the window, so
+			// a burst of changes is applied in batches but a change after a
+			// quiet period isn't delayed.
+			since := time.Duration(clock.Now().MonoNanos - lastStart)
+			if !refreshed || since >= d.cfg.batchWindow {
+				refresh(false)
+				continue
+			}
+			batch = clock.NewTimer(d.cfg.batchWindow - since)
+			batchC = batch.C()
 		case <-batchC:
 			batchC = nil
 			refresh(false)
@@ -347,9 +353,10 @@ func (d *Dataset[K, V]) loop(watch <-chan uint64) {
 			refresh(false)
 			tick = clock.NewTimer(d.cfg.pollInterval)
 		case <-d.kick:
-			if failed && time.Duration(clock.Now().MonoNanos-failedAt) < kickBackoff {
+			if failed && time.Duration(clock.Now().MonoNanos-lastStart) < kickBackoff {
 				continue
 			}
+			stopBatch() // this poll covers any batched one
 			refresh(false)
 		case <-reloadC:
 			refresh(true)
@@ -411,19 +418,29 @@ func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], hea
 			if head == cur.version {
 				return cur, head, false, nil
 			}
-			return applyDeltas(d.l, cur, head, deltas), head, false, nil
+			next, st := applyDeltas(cur, head, deltas)
+			d.applies.Add(1)
+			d.recordCopies(st)
+			return next, head, false, nil
 		}
 	}
-	next, err = d.load(d.ctx)
+	next, st, err := d.load(d.ctx, cur)
 	if err != nil {
 		return nil, 0, false, err
 	}
 	d.reloads.Add(1)
+	d.recordCopies(st)
 	if next.version < cur.version {
 		d.log.Warn("refset: source history went backwards; reloaded at an older version",
 			"applied", cur.version, "reloaded", next.version)
 	}
 	return next, next.version, true, nil
+}
+
+func (d *Dataset[K, V]) recordCopies(st copyStats) {
+	d.shardsCopied.Add(uint64(st.shardsCopied))
+	d.entriesCopied.Add(uint64(st.entriesCopied))
+	d.shardsKept.Add(uint64(st.shardsKept))
 }
 
 // finish records a completed poll and releases waiters it satisfies.

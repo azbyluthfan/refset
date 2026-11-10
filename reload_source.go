@@ -52,6 +52,22 @@ type ReloadSource[K comparable, V any] struct {
 	// promptly instead of on its next poll. Optional; it has the same rules as
 	// Source.Watch (best effort, closed when ctx ends).
 	Notify func(ctx context.Context) (<-chan uint64, error)
+
+	// Equal, if set, reports whether two values are the same. A reload keeps
+	// the shards whose values are all unchanged instead of rebuilding them, so
+	// a reload that changes few values allocates little and needs little more
+	// memory than the current version. Optional: when V is comparable with ==
+	// (and holds no interfaces), == is used without it. Set it for values
+	// that can't be compared with ==, such as structs with slices or maps. A
+	// value Equal reports as unchanged keeps its previous copy.
+	Equal func(a, b V) bool
+}
+
+func (s *ReloadSource[K, V]) equalFunc() func(a, b V) bool {
+	if s == nil {
+		return nil
+	}
+	return s.Equal
 }
 
 var errNoWatch = errors.New("refset: ReloadSource has no Notify function; relying on polling")

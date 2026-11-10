@@ -11,13 +11,18 @@ import (
 // default"; refset.Options{} is a valid configuration.
 type Options struct {
 	// Shards is the number of snapshot shards; a batch copies only the shards
-	// it touches. 0 means 256, which suits up to about 100k entries; use about
-	// 1024 at 100k and 4096 at 1M (roughly 2.5 × √entries). Must be a power
-	// of two. See docs/performance.md.
+	// it touches. 0 chooses it from the dataset's size, about 2.5 × √entries
+	// rounded up to a power of two (256 at 10k entries, 4096 at 1M), at Open
+	// and again when a full reload finds the size moved a lot. A non-zero
+	// value fixes it; it must be a power of two. See docs/performance.md.
 	Shards int
 
-	// BatchWindow delays the poll after a Watch notification so that changes
-	// arriving close together are applied as one batch. 0 means 5ms.
+	// BatchWindow is the shortest time between polls started by Watch
+	// notifications, so changes arriving close together are applied as one
+	// batch. A notification after a quiet period polls at once; one that
+	// arrives within BatchWindow of the last poll waits for the rest of the
+	// window. A read waiting for a version (GetAtLeast, GetCtx) always polls
+	// at once. 0 means 5ms.
 	BatchWindow time.Duration
 
 	// WaitBound is how long GetAtLeast and GetCtx wait for a version before
@@ -55,7 +60,6 @@ type Options struct {
 }
 
 const (
-	defaultShards      = 256
 	defaultBatchWindow = 5 * time.Millisecond
 	defaultWaitBound   = 50 * time.Millisecond
 	defaultPoll        = time.Second
@@ -63,7 +67,7 @@ const (
 )
 
 type config struct {
-	shards         int
+	shards         int // 0: chosen from the dataset's size
 	batchWindow    time.Duration
 	waitBound      time.Duration // < 0 means never wait
 	pollInterval   time.Duration
@@ -91,11 +95,8 @@ func (o Options) resolve() (config, error) {
 	var errs []error
 	bad := func(format string, args ...any) { errs = append(errs, fmt.Errorf(format, args...)) }
 
-	switch {
-	case c.shards == 0:
-		c.shards = defaultShards
-	case c.shards < 0 || c.shards > maxShards || c.shards&(c.shards-1) != 0:
-		bad("Shards must be a power of two between 1 and %d, got %d", maxShards, c.shards)
+	if c.shards < 0 || c.shards > maxShards || c.shards&(c.shards-1) != 0 { // 0: automatic
+		bad("Shards must be 0 (automatic) or a power of two between 1 and %d, got %d", maxShards, c.shards)
 	}
 	switch {
 	case c.batchWindow == 0:
