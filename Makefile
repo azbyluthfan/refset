@@ -5,7 +5,7 @@ export GOWORK := off
 GO ?= go
 PKGS := ./...
 
-.PHONY: all ci test race cover bench vet fmt fmt-check lint check-deps vulncheck examples pg-up pg-down demo demo-lru
+.PHONY: all ci test race cover bench vet fmt fmt-check lint check-deps vulncheck fuzz soak examples pg-up pg-down demo demo-lru
 
 all: ci
 
@@ -25,7 +25,7 @@ cover:
 	$(GO) test -race -coverprofile=coverage.out -covermode=atomic $(PKGS)
 	$(GO) tool cover -func=coverage.out | tail -n 1
 
-## bench: run benchmarks in the library module (comparisons live in bench/, M5)
+## bench: run benchmarks in the library module (comparisons live in bench/)
 bench:
 	$(GO) test -run='^$$' -bench=. -benchmem $(PKGS)
 
@@ -50,9 +50,31 @@ lint:
 check-deps:
 	./scripts/check-zero-deps.sh
 
-## vulncheck: govulncheck (needs network to fetch the tool)
+GOVULNCHECK_VERSION ?= v1.9.0
+
+## vulncheck: govulncheck on all three modules (needs network to fetch the tool)
 vulncheck:
-	$(GO) run golang.org/x/vuln/cmd/govulncheck@latest $(PKGS)
+	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) $(PKGS)
+	cd examples && $(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+	cd bench && $(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+
+FUZZTIME ?= 30s
+
+## fuzz: run every fuzz target in the library module for FUZZTIME each
+fuzz:
+	@set -e; for pkg in $$($(GO) list $(PKGS)); do \
+		for target in $$($(GO) test -list '^Fuzz' $$pkg | grep '^Fuzz' || true); do \
+			echo "== $$pkg $$target ($(FUZZTIME))"; \
+			$(GO) test -run '^$$' -fuzz "^$$target$$" -fuzztime $(FUZZTIME) $$pkg; \
+		done; \
+	done
+
+SOAK_DURATION ?= 10m
+
+## soak: replicas under random faults for SOAK_DURATION, race detector on (log in soak.log)
+soak:
+	REFSET_SOAK=$(SOAK_DURATION) REFSET_SOAK_LOG=$(CURDIR)/soak.log \
+		$(GO) test -race -count=1 -run '^TestSoak$$' -timeout 3h -v ./internal/scenario/
 
 PG_URL ?= postgres://refset:refset@localhost:55432/refset?sslmode=disable
 COMPOSE := docker compose -f examples/docker-compose.yml

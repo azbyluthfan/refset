@@ -1,3 +1,8 @@
+# Every push to main and every pull request: the library module on its own,
+# plus checks on the workflow files and scripts. Examples run in
+# examples.yml; slow checks (soak, long fuzzing) run in weekly.yml.
+# Actions are pinned by commit SHA; Dependabot updates them.
+
 name: CI
 
 on:
@@ -15,14 +20,17 @@ concurrency:
 env:
   # Check the library module on its own, never through go.work.
   GOWORK: "off"
+  GOLANGCI_LINT_VERSION: v2.15.0
+  GOVULNCHECK_VERSION: v1.9.0
 
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: "1.27.x"
       - name: Zero dependencies in the library module
@@ -32,23 +40,23 @@ jobs:
       - name: go vet
         run: go vet ./...
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
         with:
-          # Must be built with a Go version >= go.mod's; "latest" tracks new Go releases.
-          version: latest
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
 
   test:
     name: Test (Go ${{ matrix.go }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         go: ["1.26.x", "1.27.x"]
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version: ${{ matrix.go }}
       - name: Test with race detector
@@ -57,18 +65,33 @@ jobs:
         run: go tool cover -func=coverage.out | tail -n 1
       - name: Upload coverage
         if: matrix.go == '1.27.x'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage
           path: coverage.out
 
+  workflows:
+    name: Workflows and scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: shellcheck
+        run: shellcheck -S warning scripts/*.sh
+      - name: actionlint
+        run: docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:1.7.4@sha256:82244e1db1c60d82c7792180a48dd0bcb838370bb589d53ff132503fc9485868
+
   dco:
     name: DCO sign-off
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
       - name: Check Signed-off-by on every commit
-        run: ./scripts/check-dco.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: ./scripts/check-dco.sh "$BASE" "$HEAD"

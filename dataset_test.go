@@ -135,7 +135,7 @@ func TestGetAtLeastAlreadyApplied(t *testing.T) {
 	}
 }
 
-// Feedback 1: N concurrent requests for an unknown version share polls: at
+// N concurrent requests for an unknown version share polls: at
 // most one in flight plus one queued.
 func TestConcurrentRequestsCoalescePolls(t *testing.T) {
 	src := newSrc()
@@ -175,7 +175,7 @@ func TestConcurrentRequestsCoalescePolls(t *testing.T) {
 	}
 }
 
-// Feedback 1: ErrVersionAhead only after a poll that started after the request
+// ErrVersionAhead only after a poll that started after the request
 // arrived. A poll already in flight doesn't count.
 func TestVersionAheadNeedsPollStartedAfterRequest(t *testing.T) {
 	src := newSrc()

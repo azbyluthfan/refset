@@ -1,0 +1,149 @@
+# Weekly: everything too slow for every push, and what can break without a
+# push. The jobs run side by side; the longest is the soak (about 50 min).
+#   - soak: three replicas under random partitions, dropped notifications,
+#     compactions and restarts for 45 minutes, race detector on;
+#   - every fuzz target for 5 minutes;
+#   - govulncheck on all three modules, which reports newly published
+#     advisories even in weeks without commits;
+#   - the newest Go release and the newest Postgres, so upstream releases
+#     that break the library or the examples show up before users report them.
+# A failure opens an issue (or comments on the open one). Also runs from the
+# Actions tab ("Run workflow"), e.g. before a release (docs/releasing.md).
+
+name: weekly
+
+on:
+  schedule:
+    - cron: "0 19 * * 0" # Sundays 19:00 UTC: Monday 02:00 in Jakarta
+  workflow_dispatch:
+    inputs:
+      soak_duration:
+        description: Soak duration (Go duration, e.g. 45m or 1h)
+        default: 45m
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly
+  cancel-in-progress: false
+
+env:
+  GOWORK: "off"
+
+jobs:
+  soak:
+    name: Soak
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.27.x"
+      - name: Soak (race detector on)
+        env:
+          SOAK_DURATION: ${{ inputs.soak_duration || '45m' }}
+        run: make soak SOAK_DURATION="$SOAK_DURATION"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: soak-log
+          path: soak.log
+          if-no-files-found: ignore
+
+  fuzz:
+    name: Fuzz
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.27.x"
+      - name: Every fuzz target, 5 minutes each
+        run: make fuzz FUZZTIME=5m
+      - name: Failing inputs (add them under testdata/fuzz to reproduce)
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-failures
+          path: "**/testdata/fuzz/"
+          if-no-files-found: ignore
+
+  security:
+    name: govulncheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.27.x"
+      - name: Library, examples and bench modules
+        run: make vulncheck
+
+  latest:
+    name: Newest Go and Postgres
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:latest
+        env:
+          POSTGRES_USER: refset
+          POSTGRES_PASSWORD: refset
+          POSTGRES_DB: refset
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U refset"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          check-latest: true
+      - name: Library tests
+        run: go test -race -count=1 ./...
+      - name: Examples tests
+        working-directory: examples
+        env:
+          REFSET_PG_URL: postgres://refset:refset@localhost:5432/refset?sslmode=disable
+        run: go test -race -count=1 ./...
+
+  report-failure:
+    name: Report failure
+    needs: [soak, fuzz, security, latest]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const label = "weekly-failure";
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              labels: label, state: "open", per_page: 1,
+            });
+            if (open.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: open[0].number,
+                body: `Failed again: ${run}`,
+              });
+              return;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner, repo: context.repo.repo,
+              title: `Weekly run failed: ${new Date().toISOString().slice(0, 10)}`,
+              body: `See ${run}`,
+              labels: [label],
+            });
