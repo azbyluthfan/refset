@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - `refsethttp`: version headers, per-dataset cookies, optional HMAC signing, and middleware for read-your-writes over HTTP.
 - Documentation: guarantees, performance and memory, benchmarks, soak results, source contract, design, roadmap.
 - `bench/` module comparing reads with golang-lru and locked maps, plus a memory and GC report.
-- Release workflow: tagging `vX.Y.Z` runs the full suite and publishes the CHANGELOG section as a GitHub release.
+- Release workflow: tagging `vX.Y.Z` checks the tag and CHANGELOG, runs the full suite on every supported Go and Postgres version, publishes the CHANGELOG section as a GitHub release and fetches the version through the Go module proxy ([docs/releasing.md](docs/releasing.md)).
+- Weekly workflow: soak, fuzzing, govulncheck on all modules, and the newest Go and Postgres; a failure opens an issue. `make fuzz`, `make soak`.
 - `examples/structs`, `examples/dbrows`, `examples/httpjson`: `ReloadSource` over in-memory structs, an app's own SQL, and a JSON API.
 - `examples/` module: `pgsource` (reference Postgres source with `Write`, listener, compaction and triggers), `filesource`, and the `currencies`, `plan-upgrade` and `baseline-lru` demos (`make demo`, `make demo-lru`).

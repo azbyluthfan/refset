@@ -21,3 +21,6 @@ go.work.sum
 /docs/landscape.md
 /docs/soak.md
 /docs/soak-*.log
+
+# Soak test output (make soak)
+/soak.log

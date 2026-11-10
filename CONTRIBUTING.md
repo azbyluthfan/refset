@@ -34,9 +34,23 @@ make race        # tests with the race detector
 make lint        # golangci-lint (install from https://golangci-lint.run)
 make check-deps  # fails if the library module gained a dependency
 make ci          # everything CI runs for the library
+make fuzz        # every fuzz target, 30s each (FUZZTIME=5m for longer)
+make soak        # replicas under random faults, 10 minutes (SOAK_DURATION=1h)
+make vulncheck   # govulncheck on the library, examples and bench modules
 ```
 
 `go.work` ties the library and the example modules together for local development. CI checks the library on its own with `GOWORK=off`.
+
+### Pipelines
+
+| Workflow | When | What |
+|---|---|---|
+| `ci.yml` | every push to `main` and every pull request | lint, zero-dependency check, tests with the race detector on Go 1.26 and 1.27, workflow and script checks, DCO |
+| `examples.yml` | every push to `main` and every pull request | the examples module against Postgres 15 and 17, and every demo |
+| `weekly.yml` | Sundays, or by hand from the Actions tab | 45-minute soak, 5 minutes per fuzz target, govulncheck on all modules, newest Go and Postgres; a failure opens an issue |
+| `release.yml` | a `vX.Y.Z` tag | the steps in [docs/releasing.md](docs/releasing.md) |
+
+Actions are pinned by commit SHA and updated by Dependabot.
 
 ## Pull requests
 
