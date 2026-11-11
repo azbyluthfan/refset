@@ -163,7 +163,6 @@ func nestedSection(cfg config) {
 			func(i int) { ft.upsert(keyFor(i, n), planOf(i)) })
 		_ = fd.Close()
 		runtime.KeepAlive(ft)
-		ft, fd, flat = nil, nil, nil
 
 		// Nested values.
 		empty = settledHeap()
