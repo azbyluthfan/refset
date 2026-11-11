@@ -188,17 +188,16 @@ func TestRevocationFailsClosedWhenPartitioned(t *testing.T) {
 		eventually(t, "healthy replicas poll", func() bool { return polls() >= before+2 })
 	}
 
-	// Fake timers only fire on Advance, so wait until each loop has armed the
-	// timer it needs before moving the clock: 3 poll tickers, plus a batch
-	// timer on A and C once they receive the revocation notification.
+	// Fake timers only fire on Advance, so wait until each loop has armed its
+	// poll ticker before moving the clock.
 	timers := func(n int) {
 		eventually(t, "timers armed", func() bool { return clock.Timers() == n })
 	}
 	timers(3)
 	cl.reps[b].SetPartitioned(true)
 	revoked := cl.src.Upsert(user, false) // revoke
-	timers(5)
-	advance(5 * time.Millisecond) // batch window: A and C apply the notified change
+	// A and C poll as soon as the notification arrives: nothing was applied
+	// in the last BatchWindow, so there is nothing to batch with.
 	for _, i := range []int{a, c} {
 		eventually(t, "healthy replica applies the revocation", func() bool { return cl.ds[i].Version() == revoked })
 	}
@@ -212,7 +211,7 @@ func TestRevocationFailsClosedWhenPartitioned(t *testing.T) {
 		t.Fatalf("B inside the staleness bound should still serve its old data: allowed=%v err=%v", ok, err)
 	}
 
-	advance(1990 * time.Millisecond) // t = 1.995s
+	advance(1995 * time.Millisecond) // t = 1.995s
 	if ok, err := allowed(cl.ds[b]); !ok || err != nil {
 		t.Fatalf("B at 1.995s: allowed=%v err=%v", ok, err)
 	}

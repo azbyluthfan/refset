@@ -16,7 +16,7 @@ func BenchmarkApplyDeltas(b *testing.B) {
 				name := fmt.Sprintf("entries=%d/shards=%d/keys=%d", size, shards, batch)
 				b.Run(name, func(b *testing.B) {
 					l := newLayout(shards)
-					cur := &root[string, int]{shards: emptyShards[string, int](shards)}
+					cur := &root[string, int]{l: l, shards: emptyShards[string, int](shards)}
 					keys := make([]string, size)
 					for i := range size {
 						keys[i] = "key-" + strconv.Itoa(i)
@@ -31,7 +31,7 @@ func BenchmarkApplyDeltas(b *testing.B) {
 							ops[j] = Op[string, int]{Key: keys[(i*batch+j*7919)%size], Value: i}
 						}
 						v := cur.version + 1
-						cur = applyDeltas(l, cur, v, []Delta[string, int]{{Version: v, Ops: ops}})
+						cur, _ = applyDeltas(cur, v, []Delta[string, int]{{Version: v, Ops: ops}})
 					}
 				})
 			}

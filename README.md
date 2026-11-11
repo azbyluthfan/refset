@@ -200,7 +200,7 @@ It does not fit carts, stock counts, seat holds, reservations or sessions: data 
 - A reload holds two copies of the dataset while it swaps.
 - Values are shared between readers: treat them as read-only.
 - Keep a real `PollInterval`; set `MaxStaleness` to at least 2× it for fail-closed reads.
-- Keep values small or store pointers to large ones, and raise `Options.Shards` above ~100k entries (about 1024 at 100k, 4096 at 1M).
+- Keep values small or store pointers to large ones. The shard count follows the dataset's size; see [performance](docs/performance.md).
 - Every change to the source must be recorded in its change feed. Changes it never reports go unnoticed until the next reload (`Options.ReloadInterval` bounds that).
 
 Details: [guarantees](docs/guarantees.md) · [performance and memory](docs/performance.md) · [benchmarks](docs/benchmarks.md).

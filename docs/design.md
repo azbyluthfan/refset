@@ -67,10 +67,10 @@ Everything inside a replica process except the `Source` implementation is refset
 
 ### 4.1 Storage and reads
 
-- The snapshot is split into a fixed number of shards (default 256, must be a power of two), each an immutable Go map.
+- The snapshot is split into shards, each an immutable Go map. By default the count is about 2.5 × √entries rounded up to a power of two (256 at 10k entries, 4096 at 1M), chosen at `Open` and again on a full reload when the size has moved a lot; `Options.Shards` fixes it. Each version carries its own shard count, so a reload can change it while readers of older versions keep theirs.
 - The root (shard array plus version) sits behind an `atomic.Pointer`. A read loads the root, picks the shard by `maphash.Comparable` of the key, and looks up the map. No locks.
 - Applying a batch copies only the shards it touches, builds a new root, and swaps it atomically. Readers see the whole batch or none of it.
-- Changes arriving close together are applied as one batch (default window 5 ms) to limit copying.
+- Changes arriving close together are applied as one batch to limit copying: a notification after a quiet period polls at once, and notifications within `BatchWindow` (default 5 ms) of the last poll wait for the rest of the window. A read waiting for a version polls at once regardless.
 
 ### 4.2 The Source contract
 
@@ -111,7 +111,7 @@ Why the source owns the name: `GetCtx` must pick its dataset's entry out of a re
 - **Poll-now requests are coalesced.** At most one `Changes` call is in flight, plus at most one queued follow-up. Every poll has a sequence number and records when it started. Any number of poll-now requests arriving while a poll is in flight share the single follow-up. So N concurrent requests cause at most two source calls, not N.
 - Each successful `Changes` result is applied as one batch ending at `head`. The applied version can jump by more than one, but every applied version is one the source actually committed; it never skips a change and never goes backwards. G1 holds for every version a replica exposes.
 - Deltas with `version ≤ applied` are ignored (duplicate delivery is harmless).
-- On `ErrSnapshotRequired`, the replica reloads a full snapshot in the background. The old snapshot keeps serving reads until the new one swaps in. Memory briefly holds both.
+- On `ErrSnapshotRequired`, the replica reloads a full snapshot in the background. The old snapshot keeps serving reads until the new one swaps in. Shard maps are created at their expected size. When values can be compared (`==` for comparable types without interfaces, or `ReloadSource.Equal`), a shard whose entries all came back unchanged is kept from the old version instead of rebuilt, so a reload that changes little allocates little; otherwise memory briefly holds two copies.
 - On other errors, the loop retries with backoff; reads continue from memory and staleness grows (§4.6).
 
 ### 4.4 Startup and restarts
@@ -163,7 +163,7 @@ The question a replica can answer, even when cut off, is "how long since I last 
 - `GetFresh(key)`: returns `ErrTooStale` if staleness exceeds `MaxStaleness` or lag exceeds `MaxLagVersions`. Used for fail-closed decisions such as revocation. `Get` and `GetAtLeast` never return `ErrTooStale`.
 - `Open` rejects `MaxStaleness <= PollInterval` (a healthy replica would fail between polls). Recommended: at least 2× `PollInterval`.
 - **The guarantee in one line:** a change committed at time *t* is refused by `GetFresh` on every replica by *t* + `MaxStaleness`, up to the replica clock's rate error (negligible).
-- `Stats()`: applied version, head version, lag in versions, staleness, last apply time, reload count (and, once the reconcile check exists, divergence count).
+- `Stats()`: applied version, head version, lag in versions, staleness, last apply time, reload count, shard count and copy-on-write counters (batches applied, shards and entries copied, shards kept by reloads), and, once the reconcile check exists, divergence count.
 - `GetFresh` bounds how far behind the source's change feed a replica is. It cannot detect changes the feed never recorded (§4.10).
 
 ### 4.7 Version propagation
@@ -265,8 +265,8 @@ type Delta[K comparable, V any] struct {
 
 // Zero value of every field means "use the default". Disabling uses a sentinel.
 type Options struct {
-    Shards                 int           // 0 → 256; must be a power of two
-    BatchWindow            time.Duration // 0 → 5ms
+    Shards                 int           // 0 → about 2.5 × √entries, a power of two; else must be a power of two
+    BatchWindow            time.Duration // 0 → 5ms; shortest time between notification-driven polls
     WaitBound              time.Duration // 0 → 50ms; -1 → never wait
     PollInterval           time.Duration // 0 → 1s
     MaxStaleness           time.Duration // 0 → unchecked; must exceed PollInterval
@@ -591,7 +591,7 @@ Every push: lint (including the zero-requires check and DCO), unit, property, ra
 
 ## 9. Roadmap
 
-Kept current in [roadmap.md](roadmap.md). Planned after v0.1: a performance track that first measures tail latency, propagation latency, GC CPU under churn and reload memory peak, then automatic shard sizing, an adaptive batch window, diff-on-reload (less garbage and a lower memory peak for full reloads), avoiding the double key hash on reads, a reconcile check that detects unlogged changes, an optional local snapshot file for faster restarts, a pointer-light layout for very large datasets, metrics adapters built on `Stats()`, more example sources, gRPC helpers, and promoting `pgsource` to an official `refsetpg` module once there is demand.
+Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of tail latency, propagation latency, GC CPU and reload memory (`bench/perfreport`), automatic shard sizing, an adaptive batch window, and pre-sized, diffed reloads. Planned: avoiding the double key hash on reads, a reconcile check that detects unlogged changes, an optional local snapshot file for faster restarts, a pointer-light layout for very large datasets, metrics adapters built on `Stats()`, more example sources, gRPC helpers, and promoting `pgsource` to an official `refsetpg` module once there is demand.
 
 ## 10. Risks and Open Questions
 

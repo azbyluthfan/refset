@@ -18,7 +18,8 @@ Nothing here is a promise of dates. Items move up when users ask for them; open 
 | Pipelines: CI, examples, weekly (soak, fuzzing, govulncheck, newest Go and Postgres), release | Done, green on GitHub |
 | **v0.1.0** | **Released 2026-11-11** ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.1.0), [pkg.go.dev](https://pkg.go.dev/github.com/azbyluthfan/refset)) |
 | Performance P0: measure latency, GC and memory | Done ([benchmarks](benchmarks.md#latency-gc-and-memory-under-load)) |
-| **Performance P1** | **Next** |
+| Performance P1: automatic shards, adaptive batching, diffed reloads | Done, unreleased ([results](benchmarks.md#after-the-p1-changes)) |
+| **v0.2.0** | **Next:** release P0 and P1 ([releasing.md](releasing.md)) |
 
 ## Performance track
 
@@ -28,18 +29,18 @@ refset trades along three axes, and an improvement on one often costs another:
 - **GC time:** the CPU the garbage collector spends because of refset, both scanning the live dataset and collecting the shards each change throws away. Pause times are only part of this.
 - **Memory footprint:** bytes per entry in steady state, and the peak during a reload (two full copies today).
 
-### Known today (measured in P0)
+### Known today (after P1)
 
-Apple M1, default options, string keys and a 24-byte value. Full tables in [benchmarks.md](benchmarks.md#latency-gc-and-memory-under-load).
+Apple M1, default options, string keys and a 24-byte value. Full tables in [benchmarks.md](benchmarks.md#latency-gc-and-memory-under-load), before/after in [After the P1 changes](benchmarks.md#after-the-p1-changes).
 
-| Axis | Measured | Gap |
+| Axis | Measured | Remaining gap |
 |---|---|---|
-| Read latency | 26–36 ns per read up to 100k entries, ~185 ns at 1M (memory-bound); p99.9 per 16 reads stays at 3–7 µs up to 100k under writes and reloads, where a locked map's doubles | None that matters at these sizes. Single-core reads still hash each key twice (8–36 ns slower than a locked map) |
-| Propagation latency | Notification: 5.0 ms p50, nearly all of it the fixed `BatchWindow`. Read-your-writes: 76 µs p50, but p99 ~1 ms and max 6.4 ms | The batch window delays isolated changes, and read-your-writes waits for it when the notification arrives first |
-| GC, write path | At 1M entries, ~370 KB of garbage per one-key change with 256 shards: 11% of a core at 1,000 changes/s (1% at 100/s). Pauses < 0.2 ms | Default shard count is too low for large datasets |
-| GC, reloads | A full reload at 1M allocates 190 MB, 1.7× a presized map | Shards grow from empty on every load |
+| Read latency | 28–39 ns per read up to 100k entries, ~185 ns at 1M (memory-bound); p99.9 per 16 reads stays at 3–6 µs up to 100k under writes and reloads, where a locked map's doubles | Single-core reads hash each key twice (8–36 ns slower than a locked map) |
+| Propagation latency | Notification: 70 µs p50, 179 µs max. Read-your-writes: 88 µs p50, 338 µs max | None at these sizes; a full reload per change costs the load time (11 ms at 100k) |
+| GC, write path | 1M entries at 1,000 changes/s: 28 MB/s of garbage, 0.8% of a core (was 370 MB/s, 11%) | None measured |
+| GC, reloads | A reload changing one entry at 1M allocates 17 MB (was 190 MB) | Values that can't be compared need `ReloadSource.Equal` to benefit |
 | GC, holding data | 1–5% of a core at 100 MB/s of application allocation, the same as a map | Small; pointer-free storage could save at most this |
-| Memory | Within 10% of a plain map per entry (100 B at 1M); a reload peaks at 1.9× the steady heap | The reload peak, every time for `ReloadSource` |
+| Memory | Within 10% of a plain map per entry (90 B at 1M); a reload peaks at 1.12× the steady heap (was 1.9×) | Without a way to compare values, a reload still holds two copies |
 
 ### Phase P0: measure all three axes (done 2026-11-11)
 
@@ -47,9 +48,20 @@ Apple M1, default options, string keys and a 24-byte value. Full tables in [benc
 - `scripts/bench-compare.sh` (`make bench-compare`): core benchmarks of the latest release against the working tree with benchstat, alternating runs; part of the release checklist.
 - CI builds the `bench` module and smoke-runs perfreport, so the tool keeps working.
 
-### Phase P1: quick wins (v0.2)
+### Phase P1: quick wins (done 2026-11-11, ships in v0.2)
 
-Ordered by measured effect. Each item is re-measured with perfreport against the P0 tables.
+Each item was re-measured with perfreport against the P0 tables; results in [benchmarks.md](benchmarks.md#after-the-p1-changes). The automatic shard count is capped at 512 below 200k entries: without the cap, 1024 shards at 100k made reads 7.5% slower.
+
+| Item | Target from P0 | Result |
+|---|---|---|
+| Automatic shard count | 1M, 1,000 changes/s: 370 MB/s, 11% → a few MB/s, ~1% | 28 MB/s, 0.8% |
+| Adaptive batch window | Notification p50 5.0 ms → < 0.5 ms; read-your-writes max 6.4 ms → < 1 ms | 70 µs; 338 µs |
+| Pre-size shards on reload | 1M reload 190 MB → ~113 MB | 17 MB with diffing; `Open` 38–40% faster |
+| Diff-on-reload | Peak 1.9× → toward 1× | 1.12× |
+| Apply counters in `Stats()` | — | `Shards`, `Applies`, `ShardsCopied`, `EntriesCopied`, `ShardsKept` |
+| GC tuning guide | — | [performance.md](performance.md#tuning-the-gc-for-a-large-dataset) |
+
+The plan as written before the work:
 
 | Item | Latency | GC time | Memory | Target from P0 |
 |---|---|---|---|---|

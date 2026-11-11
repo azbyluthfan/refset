@@ -6,25 +6,35 @@ import (
 	"slices"
 )
 
+// copyStats counts the copy-on-write work of one apply or reload.
+type copyStats struct {
+	shardsCopied  int // shards cloned (applies) or rebuilt (reloads)
+	entriesCopied int // entries in the shards cloned by an apply
+	shardsKept    int // shards a reload kept from the previous version
+}
+
 // applyDeltas returns a new root at version head with deltas applied on top of
 // cur. Only shards touched by the deltas are copied; the rest are shared with
 // cur. Deltas at or below cur.version are skipped (duplicate delivery). cur is
 // never modified.
-func applyDeltas[K comparable, V any](l layout, cur *root[K, V], head uint64, deltas []Delta[K, V]) *root[K, V] {
-	next := &root[K, V]{version: head, shards: slices.Clone(cur.shards), n: cur.n}
+func applyDeltas[K comparable, V any](cur *root[K, V], head uint64, deltas []Delta[K, V]) (*root[K, V], copyStats) {
+	next := &root[K, V]{version: head, l: cur.l, shards: slices.Clone(cur.shards), n: cur.n}
+	var st copyStats
 	var copied []bool
 	for _, d := range deltas {
 		if d.Version <= cur.version {
 			continue
 		}
 		for _, op := range d.Ops {
-			i := shardOf(l, op.Key)
+			i := shardOf(cur.l, op.Key)
 			if copied == nil {
 				copied = make([]bool, len(next.shards))
 			}
 			if !copied[i] {
 				next.shards[i] = maps.Clone(cur.shards[i])
 				copied[i] = true
+				st.shardsCopied++
+				st.entriesCopied += len(cur.shards[i])
 			}
 			m := next.shards[i]
 			_, existed := m[op.Key]
@@ -41,7 +51,7 @@ func applyDeltas[K comparable, V any](l layout, cur *root[K, V], head uint64, de
 			m[op.Key] = op.Value
 		}
 	}
-	return next
+	return next, st
 }
 
 // checkChanges validates a Changes result against the contract before it is
