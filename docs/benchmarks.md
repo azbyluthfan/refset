@@ -32,7 +32,7 @@ Mean of 3 runs, ns per read. 0 allocations everywhere.
 What this shows:
 
 - **Under concurrency, refset scales and lock-based maps don't.** With 8 cores reading, refset is 3–18× faster than a map behind a `sync.RWMutex`, whose shared reader counter becomes a contended cache line, and 13–35× faster than golang-lru. It stays within about 1.8× of an unsynchronized map, which isn't safe once anything writes.
-- **Single-threaded, refset costs about 8–36 ns more than a locked map.** Each read hashes the key twice (once to pick a shard, once inside the shard's map) and follows one more pointer. That is the price of copy-on-write shards; removing the double hash is a post-v0.1 idea.
+- **Single-threaded, refset costs about 8–36 ns more than a locked map.** Each read hashes the key twice (once to pick a shard, once inside the shard's map) and follows one more pointer. That is the price of copy-on-write shards. A custom table that hashes once was tried and not adopted ([P2 experiment](#shard-storage-experiment-p2)).
 - **At 1M entries, reads are memory-bound** (rule R4): 93–200 ns single-threaded for every implementation, because random keys miss the 12 MB L2 and go to main memory. 10k and 100k entries stay largely in cache.
 
 ## Reads while the background loop is busy
@@ -250,6 +250,68 @@ The same `make perfreport` run on the P1 code (automatic shard count, adaptive b
 At 250k and 500k entries, 256, 1024 and 2048 shards read within noise of each other (97–98 ns and 127–130 ns): reads there come from main memory.
 
 `Open` also got faster: `make bench-compare` against v0.1.0 shows 38–40% less time and 10–28% fewer bytes allocated at 100k and 1M entries, because shards are created at their final size.
+
+## Large datasets and nested values
+
+`go run ./perfreport -sections scale,nested -scale 10000000 -nested-sizes 100000,1000000` (in `bench/`), 2026-11-11, P1 code, same machine on AC power. Checks around the run: no swap-outs, Low Power Mode off throughout, and the 10k and 100k read latencies afterwards matched the tables above (28 and 36 ns). Two earlier attempts were discarded: one swapped (another program held 1.5 GB), one ran in Low Power Mode, which made reads about 2.3× slower.
+
+### 10M flat entries
+
+| Measure | Value |
+|---|---|
+| `Open` (in-process source) | 2.05 s, 8192 shards chosen |
+| Dataset storage per entry | 105 B (whole heap after GC: 1.5 GB, including keys and the source's copy) |
+| Read p50 per read, idle / 1,000 changes/s | 220 / 224 ns (memory-bound, like 1M) |
+| Read p99.9 per 16 reads, idle / 1,000 changes/s | 19.5 / 28.7 µs |
+| 1,000 changes/s | 108 MB/s allocated, 3.3% of a core in GC: one collection every ~14 s, ~0.5 s of CPU each |
+| Holding it while the app allocates 100 MB/s | 2.4% of a core: one collection every ~14 s, ~0.37 s of CPU each |
+| Full reload changing one entry | 1.9 s, 158 MB allocated, heap peak 1.10× steady |
+
+At this size a collection costs about half a second of CPU, the time to mark 1.5 GB of live heap (spread over the GC's worker threads, concurrently with the program). Collections are rare because Go lets the heap grow by `GOGC`% of the live heap first, so the cost per second stays small.
+
+### Nested values
+
+`account` holds an ID, a 24-byte struct, a 3-string slice, a 4-entry map, 5 members each with a 2-string slice, and a pointer to the first member: about 20 heap objects and a 104-byte top-level struct. It is compared with the flat 24-byte struct at the same sizes. GC cells run 30 s.
+
+| Entries | Value | Heap per entry, whole process | Read p50 per read | Holding (app allocating 100 MB/s): GC CPU, collections/s, CPU per collection | 1,000 changes/s: GC CPU, allocated |
+|---|---|---|---|---|---|
+| 100k | flat | 81 B | 49 ns | 5.3%, 8.7/s, 6.1 ms | 0.9%, 11.8 MB/s |
+| 100k | nested | 1,227 B | 184 ns | 3.3%, 0.87/s, 38.3 ms | 1.6%, 33.8 MB/s |
+| 1M | flat | 114 B | 180 ns | 3.1%, 0.73/s, 41.9 ms | 0.9%, 27.9 MB/s |
+| 1M | nested | 1,325 B | 416 ns | 1.8%, 0.07/s, 264 ms | 1.6%, 70.6 MB/s |
+
+Full reloads through `ReloadSource`, each changing one entry (median of 3). `Load` returns a copy of the value slice each time, as an application's own load function would; that copy is included in "allocated" and in the peak.
+
+| Entries | Value | `Equal` | Reload time | Allocated per reload | Shards kept | Heap peak ÷ steady |
+|---|---|---|---|---|---|---|
+| 100k | flat with ID | `==` (automatic) | 15 ms | 5.4 MB | 511 of 512 | 1.39 |
+| 100k | nested | none | 10 ms | 26.3 MB | 0 of 512 | 1.24 |
+| 100k | nested | hand-written | 36 ms | 11.5 MB | 511 of 512 | 1.11 |
+| 1M | flat with ID | `==` (automatic) | 219 ms | 54.9 MB | 4095 of 4096 | 1.30 |
+| 1M | nested | none | 166 ms | 356 MB | 0 of 4096 | 1.31 |
+| 1M | nested | hand-written | 445 ms | 116 MB | 4095 of 4096 | 1.10 |
+
+- **Nested values are read 2.3–3.8× slower** because `Get` copies the 104-byte top-level struct (rule R5). Storing `*account` keeps reads at pointer cost.
+- **The GC marks nested data about 6× longer per collection** (38 vs 6 ms at 100k; 264 vs 42 ms at 1M) because it follows every pointer. Collections were 10× rarer because the heap is larger, so with the default `GOGC` the GC CPU per second was lower, not higher. Under a tight `GOMEMLIMIT` collections come more often, and the per-collection cost is what you pay.
+- **Changes to nested data allocate 2.5–3× more** (34–71 MB/s at 1,000 changes/s): each change builds a new ~1.2 KB value, and each copied shard slot is 104 bytes.
+- **Without `Equal`, a reload of nested values rebuilds every shard** (356 MB at 1M). A hand-written `Equal` cuts that to 116 MB, mostly `Load`'s own copy of the value slice, and the heap peak to 1.10×, but comparing every value made the reload 2.7× slower (445 vs 166 ms). Values comparable with `==` get both benefits automatically.
+- The flat `ReloadSource` rows peak higher (1.30–1.39×) than the 10M row (1.10×) because `Load` copies the value slice, which is large next to a small flat dataset.
+
+## Shard storage experiment (P2)
+
+Roadmap P2 asked whether replacing each shard's Go map with a custom table would make reads faster: hash the key once (the shard and the slot both come from one hash, where a map hashes again) and keep entries in one flat array that the CPU can prefetch. `BenchmarkShardStorage` compared the two with the same layout and automatic shard count, 6 runs each, 2026-11-11, string keys and `int` values. Two variants of an open-addressing table with linear probing, each slot holding (hash, key, value):
+
+| vs Go maps | Variant 1: power-of-two size, ≤ 75% full | Variant 2: exact size, ≤ 85% full |
+|---|---|---|
+| Read, one core, 10k / 100k / 1M | ~ / ~ / **−16%** | +14% / +23% / +3% |
+| Read, all cores, 10k / 100k / 1M | ~ / −12% / **−25%** | +8% / +14% / ~ |
+| One-key change, 10k / 100k / 1M | +9% / +63% / +4% | +5% / +21% / −6% |
+| Build, 10k / 100k / 1M | +5% / +37% / −26% | +23% / +30% / −9% |
+| Bytes per entry, 10k / 100k / 1M | +32% / +174% / +35% | +11% / +33% / −18% |
+
+(~: no significant difference.)
+
+**Not adopted.** The exit criteria were "better on its target axis, no more than 5% worse on any other at 10k–100k entries". Variant 1 makes large-dataset reads 16–25% faster but costs a third more memory or worse; variant 2 fixes most of the memory and loses the read gain. The trade-off is structural: a slot stores an 8-byte hash where Go's maps (Swiss tables since Go 1.24) store a 1-byte control code, so a table either leaves slots empty or probes further. Matching Go's maps on both would mean writing another Swiss table to save one hash per read. Go's maps already read within ~10 ns of an unhashed lookup at these sizes.
 
 ## Soak test
 

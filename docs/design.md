@@ -232,7 +232,7 @@ refset's speed comes from reads that hit CPU caches. Software can't choose what 
 | Maps store values inline; each pointer is another possible miss | **R5** Keep `V` compact; above roughly one cache line, consider storing `*V` |
 | Copying large blocks streams through and evicts the cache | **R6** Copy-on-write copies whole shards; more shards mean smaller copies. Apply cost vs shard count is benchmarked |
 | RAM is finite | **R7** A reload holds two full copies until the swap |
-| Hash lookups and pointer chasing defeat prefetching and cost GC scanning | **R8** A pointer-light, array-based layout is the post-v0.1 option for very large datasets |
+| Hash lookups and pointer chasing defeat prefetching and cost GC scanning | **R8** A flat, single-hash layout was measured and not adopted (P2): Go's Swiss-table maps matched or beat it on reads and memory together |
 
 R1 and R2 are enforced in the core today (zero-allocation tests, padded `Dataset` struct, a parallel-read-while-polling benchmark). R4–R6 are measured before v0.1 and published in `docs/benchmarks.md`.
 
@@ -591,7 +591,7 @@ Every push: lint (including the zero-requires check and DCO), unit, property, ra
 
 ## 9. Roadmap
 
-Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of tail latency, propagation latency, GC CPU and reload memory (`bench/perfreport`), automatic shard sizing, an adaptive batch window, and pre-sized, diffed reloads. Planned: avoiding the double key hash on reads, a reconcile check that detects unlogged changes, an optional local snapshot file for faster restarts, a pointer-light layout for very large datasets, metrics adapters built on `Stats()`, more example sources, gRPC helpers, and promoting `pgsource` to an official `refsetpg` module once there is demand.
+Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of tail latency, propagation latency, GC CPU and reload memory (`bench/perfreport`), automatic shard sizing, an adaptive batch window, and pre-sized, diffed reloads. Investigated and not adopted: a single-hash shard table and pointer-free storage (P2). Planned: a reconcile check that detects unlogged changes, an optional local snapshot file for faster restarts, metrics adapters built on `Stats()`, more example sources, gRPC helpers, and promoting `pgsource` to an official `refsetpg` module once there is demand.
 
 ## 10. Risks and Open Questions
 
@@ -606,7 +606,7 @@ Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of tail l
 | Postgres example pointed at a read replica | `NewSource` refuses a standby (`pg_is_in_recovery()`); documented primary requirement |
 | Trigger mode deadlocks between uncontrolled writers | Postgres aborts one (`40P01`), no corruption; documented retry advice; deferred, sorted trigger variant post-v0.1 |
 | Fallback stampede when a replica falls behind | Per-key collapsing; optional `MaxConcurrentFallbacks` |
-| Copy-on-write cost for very large datasets | Sharding plus batching; measured in 8.7; optional pointer-light layout later |
+| Copy-on-write cost for very large datasets | Sharding plus batching; the shard count follows the dataset's size; measured up to 10M entries |
 | Slow startup or source overload after mass restarts | Documented: readiness after `Open`, gradual rollouts; startup cost published; local snapshot file as a later option |
 | Clients not echoing the version header | Read-your-writes is opt-in; session-cookie alternative; revocation uses the staleness bound, which needs no client cooperation |
 | Clock problems on a replica | Staleness uses the larger of monotonic and wall elapsed time, so every clock error fails closed (§4.6) |

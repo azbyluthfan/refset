@@ -23,7 +23,7 @@ Code can't choose what the CPU caches. The hardware loads whole cache lines (64 
 | R5 | Go maps store values inline, and `Get` copies the value | **Keep values small.** A 256-byte value read 7.5× slower than a 16-byte one; storing `*V` for large values was 2.6× faster. Pointers add a hop per field they reach, so flat structs are best |
 | R6 | Each change copies every shard it touches | Nothing to do by default: the shard count is chosen from the dataset's size (below). At 1M entries it is 4096, which made a one-key change produce 13× less garbage than 256 |
 | R7 | A reload builds the new version beside the old one | With comparable values (or `ReloadSource.Equal`), unchanged shards are kept, and a reload that changes little peaked at 1.12× the steady heap. Without a way to compare, **budget memory for two copies**: at about 100 bytes per entry, 1M entries is ~100 MB, so ~200 MB during a reload |
-| R8 | Hash maps defeat prefetching and cost GC scanning | A flat, pointer-light layout is a post-v0.1 option for very large datasets. GC pauses at 1M entries were already only tens of microseconds |
+| R8 | Hash maps defeat prefetching and cost GC scanning | Nothing to do. A flat, single-hash layout was tried and not adopted: it couldn't beat Go's maps on reads and memory at once ([P2 experiment](benchmarks.md#shard-storage-experiment-p2)). Holding a dataset costs the GC the same as a plain map |
 
 ## Garbage collection
 
@@ -45,6 +45,15 @@ Go starts a collection when the heap has grown by `GOGC` percent (default 100) o
 - **Don't lower `GOGC` to save memory** with a large dataset: every collection marks it, so collections become frequent and expensive. Use `GOMEMLIMIT` instead.
 
 Measure before tuning: `GODEBUG=gctrace=1` prints each collection, and `runtime/metrics` reports GC CPU (`/cpu/classes/gc/total:cpu-seconds`). `Stats()` shows refset's side: `ShardsCopied`, `EntriesCopied` and `ShardsKept` say how much each change and reload copies.
+
+## Large datasets and nested values
+
+Measured up to 10M flat entries and 1M nested values ([benchmarks](benchmarks.md#large-datasets-and-nested-values)).
+
+- **Memory is the limit, not refset.** Plan for the dataset (about 100–125 B per entry for a string key and a small value, much more for nested values), the source's own copy if it keeps one, a reload peak of about 1.1× with comparable values (2× without), and Go's heap headroom (`GOGC`). Swapping makes every read and collection slow; size `GOMEMLIMIT` and the container well inside physical memory.
+- **Large heaps make each collection expensive but rare.** At 10M entries (1.5 GB of heap) a collection took ~0.4–0.5 s of CPU, once every ~14 s. That is cheap per second with the default `GOGC`, but a tight `GOMEMLIMIT` makes collections frequent and each one still costs that much.
+- **Nested values:** store a pointer (`*V`), so `Get` copies 8 bytes instead of the whole struct (a 104-byte value read 2.3–3.8× slower). Treat what it points to as read-only; it is shared by every reader.
+- **Nested values with `ReloadSource`:** they can't be compared with `==`, so each reload rebuilds everything unless you set `ReloadSource.Equal`. With `Equal`, a reload that changes little allocates far less and peaks near 1.1× memory, but compares every value, which took 2.7× longer at 1M entries. Set it when memory or GC matters more than reload time. For large, often-changing nested data, a `Source` with per-key changes avoids full reloads altogether.
 
 ## Choosing `Options.Shards`
 
