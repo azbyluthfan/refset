@@ -32,7 +32,7 @@ Mean of 3 runs, ns per read. 0 allocations everywhere.
 What this shows:
 
 - **Under concurrency, refset scales and lock-based maps don't.** With 8 cores reading, refset is 3–18× faster than a map behind a `sync.RWMutex`, whose shared reader counter becomes a contended cache line, and 13–35× faster than golang-lru. It stays within about 1.8× of an unsynchronized map, which isn't safe once anything writes.
-- **Single-threaded, refset costs about 8–36 ns more than a locked map.** Each read hashes the key twice (once to pick a shard, once inside the shard's map) and follows one more pointer. That is the price of copy-on-write shards; removing the double hash is a post-v0.1 idea.
+- **Single-threaded, refset costs about 8–36 ns more than a locked map.** Each read hashes the key twice (once to pick a shard, once inside the shard's map) and follows one more pointer. That is the price of copy-on-write shards. A custom table that hashes once was tried and not adopted ([P2 experiment](#shard-storage-experiment-p2)).
 - **At 1M entries, reads are memory-bound** (rule R4): 93–200 ns single-threaded for every implementation, because random keys miss the 12 MB L2 and go to main memory. 10k and 100k entries stay largely in cache.
 
 ## Reads while the background loop is busy
@@ -296,6 +296,22 @@ Full reloads through `ReloadSource`, each changing one entry (median of 3). `Loa
 - **Changes to nested data allocate 2.5–3× more** (34–71 MB/s at 1,000 changes/s): each change builds a new ~1.2 KB value, and each copied shard slot is 104 bytes.
 - **Without `Equal`, a reload of nested values rebuilds every shard** (356 MB at 1M). A hand-written `Equal` cuts that to 116 MB, mostly `Load`'s own copy of the value slice, and the heap peak to 1.10×, but comparing every value made the reload 2.7× slower (445 vs 166 ms). Values comparable with `==` get both benefits automatically.
 - The flat `ReloadSource` rows peak higher (1.30–1.39×) than the 10M row (1.10×) because `Load` copies the value slice, which is large next to a small flat dataset.
+
+## Shard storage experiment (P2)
+
+Roadmap P2 asked whether replacing each shard's Go map with a custom table would make reads faster: hash the key once (the shard and the slot both come from one hash, where a map hashes again) and keep entries in one flat array that the CPU can prefetch. `BenchmarkShardStorage` compared the two with the same layout and automatic shard count, 6 runs each, 2026-11-11, string keys and `int` values. Two variants of an open-addressing table with linear probing, each slot holding (hash, key, value):
+
+| vs Go maps | Variant 1: power-of-two size, ≤ 75% full | Variant 2: exact size, ≤ 85% full |
+|---|---|---|
+| Read, one core, 10k / 100k / 1M | ~ / ~ / **−16%** | +14% / +23% / +3% |
+| Read, all cores, 10k / 100k / 1M | ~ / −12% / **−25%** | +8% / +14% / ~ |
+| One-key change, 10k / 100k / 1M | +9% / +63% / +4% | +5% / +21% / −6% |
+| Build, 10k / 100k / 1M | +5% / +37% / −26% | +23% / +30% / −9% |
+| Bytes per entry, 10k / 100k / 1M | +32% / +174% / +35% | +11% / +33% / −18% |
+
+(~: no significant difference.)
+
+**Not adopted.** The exit criteria were "better on its target axis, no more than 5% worse on any other at 10k–100k entries". Variant 1 makes large-dataset reads 16–25% faster but costs a third more memory or worse; variant 2 fixes most of the memory and loses the read gain. The trade-off is structural: a slot stores an 8-byte hash where Go's maps (Swiss tables since Go 1.24) store a 1-byte control code, so a table either leaves slots empty or probes further. Matching Go's maps on both would mean writing another Swiss table to save one hash per read. Go's maps already read within ~10 ns of an unhashed lookup at these sizes.
 
 ## Soak test
 

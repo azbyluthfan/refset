@@ -19,6 +19,8 @@ Nothing here is a promise of dates. Items move up when users ask for them; open 
 | **v0.1.0** | **Released 2026-11-11** ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.1.0), [pkg.go.dev](https://pkg.go.dev/github.com/azbyluthfan/refset)) |
 | Performance P0: measure latency, GC and memory | Done ([benchmarks](benchmarks.md#latency-gc-and-memory-under-load)) |
 | Performance P1: automatic shards, adaptive batching, diffed reloads | Done, unreleased ([results](benchmarks.md#after-the-p1-changes)) |
+| Large datasets (10M) and nested values | Measured ([results](benchmarks.md#large-datasets-and-nested-values)) |
+| Performance P2: storage layout | Investigated, not adopted ([results](benchmarks.md#shard-storage-experiment-p2)) |
 | **v0.2.0** | **Next:** release P0 and P1 ([releasing.md](releasing.md)) |
 
 ## Performance track
@@ -35,7 +37,7 @@ Apple M1, default options, string keys and a 24-byte value. Full tables in [benc
 
 | Axis | Measured | Remaining gap |
 |---|---|---|
-| Read latency | 28–39 ns per read up to 100k entries, ~185 ns at 1M (memory-bound); p99.9 per 16 reads stays at 3–6 µs up to 100k under writes and reloads, where a locked map's doubles | Single-core reads hash each key twice (8–36 ns slower than a locked map) |
+| Read latency | 28–39 ns per read up to 100k entries, ~185 ns at 1M (memory-bound); p99.9 per 16 reads stays at 3–6 µs up to 100k under writes and reloads, where a locked map's doubles | Single-core reads hash each key twice (8–36 ns slower than a locked map); a single-hash table was tried in P2 and not adopted |
 | Propagation latency | Notification: 70 µs p50, 179 µs max. Read-your-writes: 88 µs p50, 338 µs max | None at these sizes; a full reload per change costs the load time (11 ms at 100k) |
 | GC, write path | 1M entries at 1,000 changes/s: 28 MB/s of garbage, 0.8% of a core (was 370 MB/s, 11%) | None measured |
 | GC, reloads | A reload changing one entry at 1M allocates 17 MB (was 190 MB) | Values that can't be compared need `ReloadSource.Equal` to benefit |
@@ -74,17 +76,14 @@ The plan as written before the work:
 | **Apply counters** in `Stats()`: shards and bytes copied | 0 | 0 | 0 | Lets users see whether their shard count fits |
 | **GC tuning guide** in `docs/performance.md`: `GOGC`, `GOMEMLIMIT`, and how a large long-lived dataset changes when GC runs | 0 | user-side | user-side | Docs only |
 
-### Phase P2: storage layout (v0.3, opt-in, gated on P0 numbers)
+### Phase P2: storage layout (investigated 2026-11-11, not adopted)
 
-These change how shards store data, so they are done together, behind an option, and only if a real workload shows they matter. P0 says they don't yet: reads are already flat under load, and the GC cost of holding a dataset was 1–5% of a core, the same as a map's.
+| Item | Outcome |
+|---|---|
+| **Single hash per read**, in a flat open-addressing table per shard (also covers the **flat, array-based layout**) | Built and measured against Go maps in two variants ([results](benchmarks.md#shard-storage-experiment-p2)). One made 1M-entry reads 16–25% faster but used 35–174% more memory; the other matched memory but read 14–23% slower at 10k–100k. Neither met the exit criteria (no more than 5% worse on any axis at 10k–100k). Go's Swiss-table maps already set a high bar |
+| **Pointer-free shards** (keys in a byte arena) | Not built. Holding a dataset cost the GC 2–5% of a core at 100 MB/s of application allocation, the same as a plain map, and at most half of a flat entry's pointers are in its key. Nested values keep their pointers in the values, which an arena can't remove ([measurements](benchmarks.md#large-datasets-and-nested-values)) |
 
-| Item | Latency | GC time | Memory | Cost |
-|---|---|---|---|---|
-| **Single hash per read**: a per-shard open-addressing table that takes the hash computed for shard selection, instead of a Go map that hashes again | −8 to −36 ns serial | 0 | ± | Own hash table to maintain and fuzz |
-| **Pointer-free shards**: keys copied into a per-shard byte arena and referenced by offset, values kept pointer-free where `V` allows, so the GC never scans the dataset | small + (one more indirection for string keys) | mark work for the dataset drops to near zero | likely lower (no per-key string headers) | Only pays off for large datasets; values containing pointers still need scanning |
-| **Flat, array-based layout** for very large read-mostly datasets (rule R8) | more predictable at 1M+ (prefetch-friendly) | as above | lower | Changes cost more to apply; for datasets that change rarely |
-
-**Exit for each item:** better on its target axis in the P0 tables, no worse than 5% on the others at 10k–100k entries, read path still allocation-free (rule R1).
+Revisit if a real workload shows reads or GC time from refset's own storage dominating, or if Go's maps change.
 
 ### Not planned
 

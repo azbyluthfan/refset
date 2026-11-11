@@ -23,7 +23,7 @@ Code can't choose what the CPU caches. The hardware loads whole cache lines (64 
 | R5 | Go maps store values inline, and `Get` copies the value | **Keep values small.** A 256-byte value read 7.5× slower than a 16-byte one; storing `*V` for large values was 2.6× faster. Pointers add a hop per field they reach, so flat structs are best |
 | R6 | Each change copies every shard it touches | Nothing to do by default: the shard count is chosen from the dataset's size (below). At 1M entries it is 4096, which made a one-key change produce 13× less garbage than 256 |
 | R7 | A reload builds the new version beside the old one | With comparable values (or `ReloadSource.Equal`), unchanged shards are kept, and a reload that changes little peaked at 1.12× the steady heap. Without a way to compare, **budget memory for two copies**: at about 100 bytes per entry, 1M entries is ~100 MB, so ~200 MB during a reload |
-| R8 | Hash maps defeat prefetching and cost GC scanning | A flat, pointer-light layout is a post-v0.1 option for very large datasets. GC pauses at 1M entries were already only tens of microseconds |
+| R8 | Hash maps defeat prefetching and cost GC scanning | Nothing to do. A flat, single-hash layout was tried and not adopted: it couldn't beat Go's maps on reads and memory at once ([P2 experiment](benchmarks.md#shard-storage-experiment-p2)). Holding a dataset costs the GC the same as a plain map |
 
 ## Garbage collection
 
