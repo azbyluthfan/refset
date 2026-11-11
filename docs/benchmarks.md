@@ -253,24 +253,21 @@ At 250k and 500k entries, 256, 1024 and 2048 shards read within noise of each ot
 
 ## Large datasets and nested values
 
-`go run ./perfreport -sections scale,nested` (in `bench/`), 2026-11-11, P1 code, same machine. Two cautions about this run:
+`go run ./perfreport -sections scale,nested -scale 10000000 -nested-sizes 100000,1000000` (in `bench/`), 2026-11-11, P1 code, same machine on AC power. Checks around the run: no swap-outs, Low Power Mode off throughout, and the 10k and 100k read latencies afterwards matched the tables above (28 and 36 ns). Two earlier attempts were discarded: one swapped (another program held 1.5 GB), one ran in Low Power Mode, which made reads about 2.3× slower.
 
-- **Sizes are limited by the machine.** A first attempt at 10M flat entries and 1M nested values (1.5 GB and 1.3 GB of heap) pushed this 8 GB machine into swap, which distorted every number, so it was discarded. The run below had no swap-outs.
-- **Read latencies here are inflated by about 2×.** Another application was using about 2.5 cores, so readers landed on the slower efficiency cores (the same 100k read measured 82 ns, against 36 ns in the tables above). Compare reads within this section only; GC CPU is measured as CPU time and is much less affected.
-
-### 4M flat entries
+### 10M flat entries
 
 | Measure | Value |
 |---|---|
-| `Open` (in-process source) | 1.2 s, 8192 shards chosen |
-| Dataset storage per entry | 125 B (whole heap after GC: 690 MB, including keys and the source's copy) |
-| Read p50 per read, idle / 1,000 changes/s | 252 / 256 ns (memory-bound; inflated, see above) |
-| Read p99.9 per 16 reads, idle / 1,000 changes/s | 23.0 / 23.6 µs |
-| 1,000 changes/s | 61 MB/s allocated, 2.3% of a core in GC: one collection every ~10 s, ~230 ms of CPU each |
-| Holding it while the app allocates 100 MB/s | 2.6% of a core: one collection every ~8 s, ~200 ms of CPU each |
-| Full reload changing one entry | 0.9 s, 66 MB allocated, heap peak 1.10× steady |
+| `Open` (in-process source) | 2.05 s, 8192 shards chosen |
+| Dataset storage per entry | 105 B (whole heap after GC: 1.5 GB, including keys and the source's copy) |
+| Read p50 per read, idle / 1,000 changes/s | 220 / 224 ns (memory-bound, like 1M) |
+| Read p99.9 per 16 reads, idle / 1,000 changes/s | 19.5 / 28.7 µs |
+| 1,000 changes/s | 108 MB/s allocated, 3.3% of a core in GC: one collection every ~14 s, ~0.5 s of CPU each |
+| Holding it while the app allocates 100 MB/s | 2.4% of a core: one collection every ~14 s, ~0.37 s of CPU each |
+| Full reload changing one entry | 1.9 s, 158 MB allocated, heap peak 1.10× steady |
 
-At this size the cost of a collection is set by marking ~700 MB of live heap, about 0.2 s of CPU (spread over GC worker threads, concurrently with the program). Collections are rare because Go lets the heap grow by `GOGC`% of the live heap first.
+At this size a collection costs about half a second of CPU, the time to mark 1.5 GB of live heap (spread over the GC's worker threads, concurrently with the program). Collections are rare because Go lets the heap grow by `GOGC`% of the live heap first, so the cost per second stays small.
 
 ### Nested values
 
@@ -278,26 +275,27 @@ At this size the cost of a collection is set by marking ~700 MB of live heap, ab
 
 | Entries | Value | Heap per entry, whole process | Read p50 per read | Holding (app allocating 100 MB/s): GC CPU, collections/s, CPU per collection | 1,000 changes/s: GC CPU, allocated |
 |---|---|---|---|---|---|
-| 100k | flat | 81 B | 84 ns | 7.4%, 8.6/s, 8.5 ms | 1.0%, 11.7 MB/s |
-| 100k | nested | 1,227 B | 296 ns | 3.5%, 0.87/s, 40.7 ms | 1.3%, 33.9 MB/s |
-| 500k | flat | 114 B | 192 ns | 3.8%, 1.4/s, 26.4 ms | 0.9%, 24.8 MB/s |
-| 500k | nested | 1,325 B | 472 ns | 2.6%, 0.17/s, 158 ms | 2.4%, 67.4 MB/s |
+| 100k | flat | 81 B | 49 ns | 5.3%, 8.7/s, 6.1 ms | 0.9%, 11.8 MB/s |
+| 100k | nested | 1,227 B | 184 ns | 3.3%, 0.87/s, 38.3 ms | 1.6%, 33.8 MB/s |
+| 1M | flat | 114 B | 180 ns | 3.1%, 0.73/s, 41.9 ms | 0.9%, 27.9 MB/s |
+| 1M | nested | 1,325 B | 416 ns | 1.8%, 0.07/s, 264 ms | 1.6%, 70.6 MB/s |
 
-Full reloads through `ReloadSource`, each changing one entry (median of 3). `Load` returns a copy of the value slice each time, as an application's own load function would; that copy is included in "allocated".
+Full reloads through `ReloadSource`, each changing one entry (median of 3). `Load` returns a copy of the value slice each time, as an application's own load function would; that copy is included in "allocated" and in the peak.
 
 | Entries | Value | `Equal` | Reload time | Allocated per reload | Shards kept | Heap peak ÷ steady |
 |---|---|---|---|---|---|---|
-| 100k | flat with ID | `==` (automatic) | 16 ms | 5.4 MB | 511 of 512 | 1.39 |
-| 100k | nested | none | 14 ms | 26.7 MB | 0 of 512 | 1.25 |
-| 100k | nested | hand-written | 53 ms | 11.5 MB | 511 of 512 | 1.11 |
-| 500k | flat with ID | `==` (automatic) | 136 ms | 27.4 MB | 2047 of 2048 | 1.30 |
-| 500k | nested | none | 109 ms | 178 MB | 0 of 2048 | 1.31 |
-| 500k | nested | hand-written | 297 ms | 58 MB | 2047 of 2048 | 1.10 |
+| 100k | flat with ID | `==` (automatic) | 15 ms | 5.4 MB | 511 of 512 | 1.39 |
+| 100k | nested | none | 10 ms | 26.3 MB | 0 of 512 | 1.24 |
+| 100k | nested | hand-written | 36 ms | 11.5 MB | 511 of 512 | 1.11 |
+| 1M | flat with ID | `==` (automatic) | 219 ms | 54.9 MB | 4095 of 4096 | 1.30 |
+| 1M | nested | none | 166 ms | 356 MB | 0 of 4096 | 1.31 |
+| 1M | nested | hand-written | 445 ms | 116 MB | 4095 of 4096 | 1.10 |
 
-- **Nested values are read 2.5–3.5× slower** because `Get` copies the 104-byte top-level struct (rule R5). Storing `*account` keeps reads at pointer cost.
-- **The GC marks nested data far longer per collection** (40.7 vs 8.5 ms at 100k; 158 vs 26 ms at 500k) because it follows every pointer. Collections are rarer because the heap is larger, so with the default `GOGC` the GC CPU per second was no higher. Under a tight `GOMEMLIMIT` collections come more often and the per-collection cost is what you pay.
-- **Changes to nested data allocate more** (34–67 MB/s at 1,000 changes/s), partly because each change builds a new ~1.2 KB value, and partly because each copied shard slot is 104 bytes.
-- **Without `Equal`, a reload of nested values rebuilds everything** (178 MB at 500k). With a hand-written `Equal` it allocates 58 MB, most of which is `Load`'s own copy of the value slice, and the heap peak drops to 1.10×; the deep comparisons make the reload 2.7× slower (297 vs 109 ms). Values comparable with `==` get both benefits automatically.
+- **Nested values are read 2.3–3.8× slower** because `Get` copies the 104-byte top-level struct (rule R5). Storing `*account` keeps reads at pointer cost.
+- **The GC marks nested data about 6× longer per collection** (38 vs 6 ms at 100k; 264 vs 42 ms at 1M) because it follows every pointer. Collections were 10× rarer because the heap is larger, so with the default `GOGC` the GC CPU per second was lower, not higher. Under a tight `GOMEMLIMIT` collections come more often, and the per-collection cost is what you pay.
+- **Changes to nested data allocate 2.5–3× more** (34–71 MB/s at 1,000 changes/s): each change builds a new ~1.2 KB value, and each copied shard slot is 104 bytes.
+- **Without `Equal`, a reload of nested values rebuilds every shard** (356 MB at 1M). A hand-written `Equal` cuts that to 116 MB, mostly `Load`'s own copy of the value slice, and the heap peak to 1.10×, but comparing every value made the reload 2.7× slower (445 vs 166 ms). Values comparable with `==` get both benefits automatically.
+- The flat `ReloadSource` rows peak higher (1.30–1.39×) than the 10M row (1.10×) because `Load` copies the value slice, which is large next to a small flat dataset.
 
 ## Soak test
 
