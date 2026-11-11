@@ -41,6 +41,8 @@ Apple M1, default options, string keys and a 24-byte value. Full tables in [benc
 | GC, reloads | A reload changing one entry at 1M allocates 17 MB (was 190 MB) | Values that can't be compared need `ReloadSource.Equal` to benefit |
 | GC, holding data | 1–5% of a core at 100 MB/s of application allocation, the same as a map | Small; pointer-free storage could save at most this |
 | Memory | Within 10% of a plain map per entry (90 B at 1M); a reload peaks at 1.12× the steady heap (was 1.9×) | Without a way to compare values, a reload still holds two copies |
+| Large datasets | 4M flat entries: `Open` 1.2 s, 125 B per entry, a collection every ~10 s at ~0.2 s of CPU each, a one-entry reload 0.9 s at 1.10× peak ([details](benchmarks.md#large-datasets-and-nested-values)) | 10M+ not measured: needs a machine with more memory than the 8 GB used here |
+| Nested values | Read 2.5–3.5× slower than flat (the value copy); each collection marks ~5× longer but runs ~10× less often; reloads rebuild everything without `ReloadSource.Equal`, and with it are 2.7× slower to compare | Documented (store `*V`, set `Equal`); pointer-heavy values are the case where pointer-free storage can't help, because the values themselves hold the pointers |
 
 ### Phase P0: measure all three axes (done 2026-11-11)
 

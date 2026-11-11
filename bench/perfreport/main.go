@@ -34,40 +34,44 @@ type config struct {
 	samples  int           // per propagation case
 	readers  int
 	shards   int
+
+	scaleN      int           // entries in the scale section
+	nestedSizes []int         // sizes in the nested section
+	gcDurLarge  time.Duration // GC cells with a large heap, which collects rarely
 }
 
 func main() {
-	sections := flag.String("sections", "tail,prop,gc,mem", "comma-separated sections to run")
+	sections := flag.String("sections", "tail,prop,gc,mem", "comma-separated sections to run: tail, prop, gc, mem, and the heavier scale and nested")
 	sizes := flag.String("sizes", "10000,100000,1000000", "comma-separated dataset sizes")
 	dur := flag.Duration("dur", 3*time.Second, "duration of each read-latency cell")
 	gcDur := flag.Duration("gcdur", 5*time.Second, "duration of each GC cell")
 	samples := flag.Int("samples", 200, "changes timed per propagation case")
 	readers := flag.Int("readers", max(1, runtime.GOMAXPROCS(0)/2), "reader goroutines in the latency section")
 	shards := flag.Int("shards", 0, "Options.Shards for refset (0 = the library default)")
+	scaleN := flag.Int("scale", 4_000_000, "entries in the scale section (about 150 bytes each; keep the whole run well inside free RAM, or swapping distorts every number)")
+	nestedSizes := flag.String("nested-sizes", "100000,500000", "comma-separated sizes for the nested section (about 1.3 KB each)")
+	gcDurLarge := flag.Duration("gcdur-large", 30*time.Second, "duration of each GC cell in the scale and nested sections")
 	quick := flag.Bool("quick", false, "tiny sizes and durations, to check the tool runs")
 	flag.Parse()
 
 	cfg := config{
-		sections: map[string]bool{},
-		dur:      *dur,
-		gcDur:    *gcDur,
-		samples:  *samples,
-		readers:  *readers,
-		shards:   *shards,
+		sections:   map[string]bool{},
+		dur:        *dur,
+		gcDur:      *gcDur,
+		samples:    *samples,
+		readers:    *readers,
+		shards:     *shards,
+		scaleN:     *scaleN,
+		gcDurLarge: *gcDurLarge,
 	}
 	for _, s := range strings.Split(*sections, ",") {
 		cfg.sections[strings.TrimSpace(s)] = true
 	}
-	for _, s := range strings.Split(*sizes, ",") {
-		n, err := strconv.Atoi(strings.TrimSpace(s))
-		if err != nil || n < 1 {
-			fmt.Fprintf(os.Stderr, "bad size %q\n", s)
-			os.Exit(2)
-		}
-		cfg.sizes = append(cfg.sizes, n)
-	}
+	cfg.sizes = parseSizes(*sizes)
+	cfg.nestedSizes = parseSizes(*nestedSizes)
 	if *quick {
-		cfg.sizes = []int{1000}
+		cfg.sizes, cfg.nestedSizes, cfg.scaleN = []int{1000}, []int{1000}, 2000
+		cfg.gcDurLarge = cfg.gcDur
 		cfg.dur, cfg.gcDur, cfg.samples = 200*time.Millisecond, 300*time.Millisecond, 10
 	}
 
@@ -91,6 +95,25 @@ func main() {
 	if cfg.sections["mem"] {
 		memSection(cfg)
 	}
+	if cfg.sections["scale"] {
+		scaleSection(cfg)
+	}
+	if cfg.sections["nested"] {
+		nestedSection(cfg)
+	}
+}
+
+func parseSizes(list string) []int {
+	var out []int
+	for _, s := range strings.Split(list, ",") {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil || n < 1 {
+			fmt.Fprintf(os.Stderr, "bad size %q\n", s)
+			os.Exit(2)
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 func envOr(k, def string) string {

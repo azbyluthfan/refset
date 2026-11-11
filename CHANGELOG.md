@@ -7,6 +7,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 
 - `bench/perfreport` (`make perfreport`): read latency percentiles under writes and reloads, commit-to-visible latency, GC CPU and allocation under writes and while the application allocates, memory per entry and the reload peak, each next to a locked map. Results in docs/benchmarks.md.
+- `perfreport -sections scale,nested`: a large flat dataset (4M entries by default) and deeply nested values, including reloads with and without `ReloadSource.Equal`. Results in docs/benchmarks.md, guidance in docs/performance.md.
 - `scripts/bench-compare.sh` (`make bench-compare`): compares core benchmarks between the latest release and the working tree with benchstat.
 - Full reloads keep unchanged shards: when values can be compared (`==` for comparable types without interfaces, or the new `ReloadSource.Equal`), a shard whose entries all came back unchanged is kept from the current version instead of rebuilt. A reload that changes little, which is every reload with `ReloadSource`, now allocates little and no longer doubles memory.
 - `Stats` reports `Shards`, `Applies`, `ShardsCopied`, `EntriesCopied` and `ShardsKept`, to judge the copy-on-write cost.

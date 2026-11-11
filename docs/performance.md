@@ -46,6 +46,15 @@ Go starts a collection when the heap has grown by `GOGC` percent (default 100) o
 
 Measure before tuning: `GODEBUG=gctrace=1` prints each collection, and `runtime/metrics` reports GC CPU (`/cpu/classes/gc/total:cpu-seconds`). `Stats()` shows refset's side: `ShardsCopied`, `EntriesCopied` and `ShardsKept` say how much each change and reload copies.
 
+## Large datasets and nested values
+
+Measured up to 4M flat entries and 500k nested values ([benchmarks](benchmarks.md#large-datasets-and-nested-values)); larger runs didn't fit this machine's memory without swapping.
+
+- **Memory is the limit, not refset.** Plan for the dataset (about 100–125 B per entry for a string key and a small value, much more for nested values), the source's own copy if it keeps one, a reload peak of about 1.1× with comparable values (2× without), and Go's heap headroom (`GOGC`). Swapping makes every read and collection slow; size `GOMEMLIMIT` and the container well inside physical memory.
+- **Large heaps make each collection expensive but rare.** At 4M entries a collection took ~0.2 s of CPU, once every 8–10 s. That is cheap per second with the default `GOGC`, but a tight `GOMEMLIMIT` makes collections frequent and each one still costs that much.
+- **Nested values:** store a pointer (`*V`), so `Get` copies 8 bytes instead of the whole struct (a 104-byte value read 2.5–3.5× slower). Treat what it points to as read-only; it is shared by every reader.
+- **Nested values with `ReloadSource`:** they can't be compared with `==`, so each reload rebuilds everything unless you set `ReloadSource.Equal`. With `Equal`, a reload that changes little allocates far less and peaks near 1.1× memory, but compares every value, which took 2.7× longer at 500k. Set it when memory or GC matters more than reload time. For large, often-changing nested data, a `Source` with per-key changes avoids full reloads altogether.
+
 ## Choosing `Options.Shards`
 
 Leave it at 0. refset then chooses about 2.5 × √entries, rounded up to a power of two, and at most 512 below 200,000 entries:
