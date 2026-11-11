@@ -591,7 +591,7 @@ Every push: lint (including the zero-requires check and DCO), unit, property, ra
 
 ## 9. Roadmap
 
-Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of tail latency, propagation latency, GC CPU and reload memory (`bench/perfreport`), automatic shard sizing, an adaptive batch window, and pre-sized, diffed reloads. Investigated and not adopted: a single-hash shard table and pointer-free storage (P2). Planned: a reconcile check that detects unlogged changes, an optional local snapshot file for faster restarts, metrics adapters built on `Stats()`, more example sources, gRPC helpers, and promoting `pgsource` to an official `refsetpg` module once there is demand.
+Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of tail latency, propagation latency, GC CPU and reload memory (`bench/perfreport`), automatic shard sizing, an adaptive batch window, and pre-sized, diffed reloads. Investigated and not adopted: a single-hash shard table and pointer-free storage (P2). Next: exploration of memory limits, real-source costs, other machines and operating systems, and security (P3). Planned: a reconcile check that detects unlogged changes, an optional local snapshot file for faster restarts, metrics adapters built on `Stats()`, more example sources, gRPC helpers, and promoting `pgsource` to an official `refsetpg` module once there is demand.
 
 ## 10. Risks and Open Questions
 

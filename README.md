@@ -207,7 +207,7 @@ Details: [guarantees](docs/guarantees.md) · [performance and memory](docs/perfo
 
 ## Status
 
-Experimental. v0.1.0 is the first release, and the API may change before v1.0. See the [CHANGELOG](CHANGELOG.md) and the [roadmap](docs/roadmap.md).
+Experimental. The latest release is v0.2.0; the API may change before v1.0. See the [CHANGELOG](CHANGELOG.md) and the [roadmap](docs/roadmap.md).
 
 ## Documentation
 

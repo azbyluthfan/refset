@@ -18,10 +18,11 @@ Nothing here is a promise of dates. Items move up when users ask for them; open 
 | Pipelines: CI, examples, weekly (soak, fuzzing, govulncheck, newest Go and Postgres), release | Done, green on GitHub |
 | **v0.1.0** | **Released 2026-11-11** ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.1.0), [pkg.go.dev](https://pkg.go.dev/github.com/azbyluthfan/refset)) |
 | Performance P0: measure latency, GC and memory | Done ([benchmarks](benchmarks.md#latency-gc-and-memory-under-load)) |
-| Performance P1: automatic shards, adaptive batching, diffed reloads | Done, unreleased ([results](benchmarks.md#after-the-p1-changes)) |
+| Performance P1: automatic shards, adaptive batching, diffed reloads | Done, ships in v0.2.0 ([results](benchmarks.md#after-the-p1-changes)) |
 | Large datasets (10M) and nested values | Measured ([results](benchmarks.md#large-datasets-and-nested-values)) |
 | Performance P2: storage layout | Investigated, not adopted ([results](benchmarks.md#shard-storage-experiment-p2)) |
-| **v0.2.0** | **Next:** release P0 and P1 ([releasing.md](releasing.md)) |
+| **v0.2.0** | **Releasing:** P0 and P1, see the [CHANGELOG](../CHANGELOG.md) |
+| **Performance P3: exploration** | **Next** (below) |
 
 ## Performance track
 
@@ -84,6 +85,40 @@ The plan as written before the work:
 | **Pointer-free shards** (keys in a byte arena) | Not built. Holding a dataset cost the GC 2–5% of a core at 100 MB/s of application allocation, the same as a plain map, and at most half of a flat entry's pointers are in its key. Nested values keep their pointers in the values, which an arena can't remove ([measurements](benchmarks.md#large-datasets-and-nested-values)) |
 
 Revisit if a real workload shows reads or GC time from refset's own storage dominating, or if Go's maps change.
+
+### Phase P3: exploration (next)
+
+Questions the docs make claims about without having tested them, or where real deployments differ from the one machine (Apple M1, macOS) used so far. Each item answers one question and changes the docs it names; none is expected to change the library unless the answer surprises. Three groups: measurement, platforms, security.
+
+#### P3a: measurement
+
+| Item | Question | How | Changes |
+|---|---|---|---|
+| **Tight memory limits** | How does GC CPU grow as `GOMEMLIMIT` approaches the dataset's size, and where should it sit? docs/performance.md says "well above twice the dataset" without a measurement | A perfreport section sweeping `GOMEMLIMIT` from 4× down to 1.2× the steady heap at 1M and 10M entries, with writes and application allocation; GC CPU, collections per second and reload behaviour at each step | A measured rule for `GOMEMLIMIT` and container sizing in docs/performance.md |
+| **The source side, with Postgres** | How long does `pgsource` take to load 1M and 10M rows, and what do N replicas do to the database? Every `Open` and reload number so far is in-process and leaves out the source's read time | Load and reload timings for `pgsource` and a `ReloadSource` over `dbrows`; 1–50 replicas polling and listening on one Postgres, measuring connections, idle-poll query rate and `NOTIFY` fan-out | Startup, reload and replica-count guidance in docs/performance.md and the examples README |
+
+#### P3b: machines, CPUs and operating systems
+
+| Item | Question | How | Changes |
+|---|---|---|---|
+| **x86 and arm64 servers** | Do the read curve and the 200k-entry shard cap hold on x86 (64-byte cache lines, smaller per-core L2, large L3) and on arm64 servers? | perfreport on GitHub's Linux runners (amd64 and arm64) from the weekly workflow, for trends; once each on a dedicated Intel, AMD and Graviton machine | A table per machine in docs/benchmarks.md; the shard cap made CPU-aware or adjusted if they disagree |
+| **Operating systems** | Does everything pass on Windows and Linux as well as macOS, with their different timer resolutions? `BatchWindow` (5 ms) and `WaitBound` (50 ms) assume fine-grained timers | The test suite and race tests on `windows-latest` and `ubuntu-latest` in CI; timing tests checked for flakiness there | A CI matrix over the three OSes; documented timer caveats if any |
+| **Clocks across suspend and migration** | Does `GetFresh` fail closed as guaranteed (G5) on each OS when a machine sleeps, a VM is migrated, or NTP steps the clock? The fake-clock tests cover the logic, but the real monotonic clock stops during suspend on some systems and not others | Suspend/resume and clock-step runs on macOS, Linux and Windows, checking `Stats().Staleness` and `GetFresh` against wall time | docs/guarantees.md states the behaviour per OS, with tests where the platform allows |
+| **32-bit, big-endian and WebAssembly** | Does refset build and pass on `linux/386`, `linux/arm`, a big-endian target (`linux/s390x`) and `wasip1/wasm`? 64-bit atomics, the cache-line padding and hashing are the risks | A cross-compile matrix in CI, and tests under QEMU or a Wasm runtime for one target of each kind | Supported platforms listed in the README; fixes or documented exclusions |
+| **Container CPU limits** | With 1–2 CPUs (cgroup quota, `GOMAXPROCS` 1–2) and heavy reads, does the background loop keep up, or do propagation and staleness suffer enough to make `GetFresh` fail on a healthy replica? | perfreport's latency and propagation sections at `GOMAXPROCS` 1, 2 and 4, and under a CPU quota in a container | Guidance on minimum CPU and `MaxStaleness` headroom in docs/performance.md |
+
+#### P3c: security
+
+| Item | Question | How | Changes |
+|---|---|---|---|
+| **Threat model** | What does refset trust, and what can an attacker control? The source and the application are trusted; version headers and cookies come from clients | Write it down: assets, trust boundaries, and what each guarantee assumes | A new docs/security.md, linked from SECURITY.md |
+| **Memory safety and injection** (reviewed 2026-11-11 for v0.2.0) | Can anything in refset corrupt memory or be injected into? | Reviewed: no `unsafe`, cgo, assembly or `linkname` in the library outside tests; `reflect` only checks a type's comparability; shared state uses atomics and mutexes, with the race detector in CI, a 64-reader race test and a 1-hour soak under `-race`; slices and strings are bounds-checked, so overflows panic instead of corrupting; the version header is length- and entry-limited, parsed with `ParseUint`, and fuzzed; dataset names are restricted to `[A-Za-z0-9._-]`, so headers and cookies can't be injected into; HMAC signatures are compared in constant time; cookies are `HttpOnly`, `SameSite=Lax`, `Secure` by default; `pgsource` sanitizes identifiers, passes values as parameters, and now quotes DDL literals safely whatever `standard_conforming_strings` is; govulncheck finds nothing in any module | Recorded in docs/security.md |
+| **Shared values in user code** | `Get` returns values every reader shares. If `V` holds a slice or map and the application changes it, that is a data race in the application, and concurrent map writes crash the process. The docs say "read-only"; nothing enforces it | Options: a `refsettest` helper that detects mutation of returned values in tests, an opt-in copy on read, or more prominent docs and examples using `*V` with immutable contents | One of these, documented in docs/guarantees.md |
+| **Forged-version amplification** | Without signing, any client can send a high minimum version. Each such request starts a poll, holds a goroutine for up to `WaitBound`, and may call the source through `KeyLoader`. How much load can one client cause? | A flood test with signing off and on: polls per second, source queries, goroutines, latency of legitimate requests | Whether signing should be the default for `refsethttp`, and documented limits |
+| **Fallback limits** | `MaxConcurrentFallbacks` defaults to unlimited, so slow replicas plus many requests can multiply load on the source | Measure source load under a slow replica with and without a cap | A safe default for `MaxConcurrentFallbacks`, or prominent guidance |
+| **Misbehaving user code and sources** | What happens when `Load`, `Key`, `Equal` or a `Source` panics, blocks, or returns something huge? They run on the background loop, so a panic there takes down the process | Tests that inject each failure; a decision on recovering panics in the loop, and on an optional entry-count limit | Behaviour documented in docs/guarantees.md; library changes only if the decision calls for them |
+| **Broader fuzzing** | Is the apply path safe against any sequence of `Changes` results, valid or not, and is diff-on-reload safe against any snapshot? | Fuzz targets that drive a `Dataset` with arbitrary deltas and snapshots and check its invariants | New fuzz targets in the weekly run |
+| **Supply chain and static analysis** | Release tags are signed, the library has no dependencies, and govulncheck runs weekly. What else is cheap and worth having? | Evaluate OpenSSF Scorecard, CodeQL or gosec in CI, and build provenance for releases | Added to CI where they find real issues or cost little |
 
 ### Not planned
 

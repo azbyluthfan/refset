@@ -90,6 +90,13 @@ func run() error {
 		Load:    store.Load,
 		Version: store.Version,
 		Key:     func(p Plan) string { return p.ID },
+		// Plan holds a slice, so == can't compare plans. With Equal, a reload
+		// keeps every shard whose plans didn't change instead of rebuilding
+		// it: little garbage and memory when a reload changes little.
+		Equal: func(a, b Plan) bool {
+			return a.ID == b.ID && a.Name == b.Name && a.MaxSeats == b.MaxSeats &&
+				a.PriceCents == b.PriceCents && slices.Equal(a.Features, b.Features)
+		},
 	}, refset.Options{})
 	if err != nil {
 		return err
@@ -114,5 +121,9 @@ func run() error {
 	}
 	fmt.Printf("%-44s pro: %d seats\n", fmt.Sprintf("GetAtLeast(version %d):", v), p.MaxSeats)
 	show("And every later Get:")
+
+	st := plans.Stats()
+	fmt.Printf("%-44s %d reload, kept %d of %d shards (only the one holding pro was rebuilt)\n",
+		"Copy-on-write work (Stats):", st.Reloads, st.ShardsKept, st.Shards)
 	return nil
 }
