@@ -4,23 +4,39 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-### Added
+## [0.2.0] - 2026-11-11
 
-- `bench/perfreport` (`make perfreport`): read latency percentiles under writes and reloads, commit-to-visible latency, GC CPU and allocation under writes and while the application allocates, memory per entry and the reload peak, each next to a locked map. Results in docs/benchmarks.md.
-- `perfreport -sections scale,nested`: a large flat dataset (4M entries by default) and deeply nested values, including reloads with and without `ReloadSource.Equal`. Results in docs/benchmarks.md, guidance in docs/performance.md.
-- `scripts/bench-compare.sh` (`make bench-compare`): compares core benchmarks between the latest release and the working tree with benchstat.
-- Full reloads keep unchanged shards: when values can be compared (`==` for comparable types without interfaces, or the new `ReloadSource.Equal`), a shard whose entries all came back unchanged is kept from the current version instead of rebuilt. A reload that changes little, which is every reload with `ReloadSource`, now allocates little and no longer doubles memory.
-- `Stats` reports `Shards`, `Applies`, `ShardsCopied`, `EntriesCopied` and `ShardsKept`, to judge the copy-on-write cost.
+Performance release: changes propagate in microseconds instead of after a fixed 5 ms window, large datasets produce about 13× less garbage per change, and reloads that change little no longer double memory. Reads are unchanged. Measurements in [docs/benchmarks.md](docs/benchmarks.md#after-the-p1-changes).
 
 ### Changed
 
-- **`Options.Shards` 0 now means automatic** (was 256): about 2.5 × √entries rounded up to a power of two, chosen at `Open` and again when a full reload finds the size has moved a lot. Datasets around 10k entries keep 256; large ones get more and copy far less per change. Set `Shards` to keep a fixed count.
-- **Adaptive batch window:** a notification after a quiet period is applied at once instead of after `BatchWindow`; only notifications within `BatchWindow` of the last poll are batched. Reads waiting for a version (`GetAtLeast`, `GetCtx`) now poll at once even when a notification already announced the version.
-- Full reloads create shard maps at their expected size instead of growing them.
+- **`Options.Shards: 0` now chooses the shard count from the dataset's size** (it was a fixed 256): about 2.5 × √entries, rounded up to a power of two, at most 512 below 200,000 entries where more shards would slow reads. It is chosen at `Open` and again when a full reload finds the size has moved a lot. Datasets up to about 100k entries get 512 or fewer; 1M entries get 4096, which cut garbage per change from ~370 KB to ~28 KB. `Stats().Shards` reports the count; set `Shards` to fix it.
+- **Adaptive batch window.** A notification after a quiet period is applied at once instead of after `BatchWindow`; only notifications within `BatchWindow` of the last poll are batched. Notification to visible went from 5 ms to about 70 µs.
+- **Read-your-writes polls at once.** `GetAtLeast` and `GetCtx` start a poll even when a notification already announced the version, instead of waiting for a batched poll. The worst case went from 6.4 ms to about 0.3 ms.
+- **Full reloads create shard maps at their final size**, and `Open` stages entries first so it can: `Open` is 38–40% faster than in v0.1.0 and allocates up to 28% less.
 
-- Package documentation: a getting-started example, and links that work on pkg.go.dev.
-- README: Go version requirement, import paths of the three packages, and a complete quick-start program.
-- The examples and bench modules require v0.1.0 (they still build against the code in the repository); the examples README explains how to use an example in your own module.
+### Added
+
+- **Reloads keep unchanged shards.** When values can be compared (`==` for comparable types without interfaces, or the new `ReloadSource.Equal`), a shard whose entries all came back unchanged is kept instead of rebuilt. A 1M-entry reload changing one entry allocates 17 MB instead of 190 MB and peaks at 1.12× the heap instead of 1.9×. This is every reload with `ReloadSource`.
+- **`ReloadSource.Equal`**, for values `==` can't compare (structs with slices or maps). The `structs` example shows it.
+- **`Stats` fields** `Shards`, `Applies`, `ShardsCopied`, `EntriesCopied` and `ShardsKept`, to see what each change and reload copies.
+- **`bench/perfreport`** (`make perfreport`): read latency percentiles under writes and reloads, commit-to-visible latency, GC CPU and allocation under writes and while the application allocates, memory per entry and the reload peak, each next to a locked map; `-sections scale,nested` adds a large flat dataset and deeply nested values.
+- **`scripts/bench-compare.sh`** (`make bench-compare`): core benchmarks of the latest release against the working tree, with benchstat.
+
+### Fixed
+
+- `examples/pgsource`: trigger DDL now quotes the dataset name and key column as escape strings when they contain a backslash, so they stay literals even on a server with `standard_conforming_strings` off. Values come from the application, not end users; this closes the gap regardless.
+
+### Documentation
+
+- README: Go version requirement, the three import paths, and a complete quick-start program; package documentation with a getting-started example.
+- docs/performance.md: the automatic shard count, a GC tuning guide (`GOGC`, `GOMEMLIMIT`, containers), and guidance for large datasets and nested values.
+- docs/benchmarks.md: latency, GC and memory under load; results up to 10M flat entries and 1M nested values; the storage experiment that was tried and not adopted.
+- docs/roadmap.md: the performance track's results, the next exploration phase (memory limits, real-source costs, other machines and operating systems, security), and a memory-safety and injection review.
+
+### Upgrading
+
+No API was removed or renamed. If you relied on exactly 256 shards (for example, in a benchmark), set `Options.Shards: 256`. If you set `BatchWindow`, it now bounds how often notifications trigger polls rather than delaying every one.
 
 ## [0.1.0] - 2026-11-11
 

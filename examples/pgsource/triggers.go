@@ -120,4 +120,16 @@ func IsDeadlock(err error) bool {
 	return errors.As(err, &pg) && pg.SQLState() == "40P01"
 }
 
-func quoteLiteral(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+// quoteLiteral quotes s as a Postgres string literal for DDL, where values
+// can't be passed as parameters (trigger arguments). Doubling quotes alone is
+// only safe while standard_conforming_strings is on; with it off, a backslash
+// could end the literal early. So backslashes are doubled too and the literal
+// is written as an escape string (E'...'), which reads the same under either
+// setting.
+func quoteLiteral(s string) string {
+	q := strings.ReplaceAll(s, "'", "''")
+	if strings.Contains(q, `\`) {
+		return ` E'` + strings.ReplaceAll(q, `\`, `\\`) + `'`
+	}
+	return "'" + q + "'"
+}
