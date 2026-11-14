@@ -128,7 +128,10 @@ Questions the docs make claims about without having tested them, or where real d
 
 - ~~**Reconcile check**~~ **Done (unreleased):** `Options.Reconcile` compares each periodic reload with the version it replaces, skipping keys the source reported changing, and counts the rest in `Stats().Divergences` with a warning in the log.
 - ~~**Local snapshot file**~~ **Done (unreleased):** `refset.SnapshotFile` wraps a source; `Open` starts from the saved file (checksum, dataset name, type fingerprint and age checked; the source is used otherwise) and catches up through `Changes`; `GetFresh` fails closed until it has. 1M entries: `Save` 170 ms, 18 MB file, `Open` from the file 260 ms. How much faster that is than a real source's full load is part of the P3a Postgres measurement.
-- **pgsource:** deferred, sorted trigger variant (removes trigger-mode deadlocks); key-mapping triggers for joined tables; snapshot loading from a read replica.
+- **pgsource:**
+  - ~~Deferred, sorted trigger variant~~ **Done (unreleased):** `InstallDeferredTriggers` assigns versions at commit in sorted order. Under 20 concurrent writers in random table orders, immediate mode aborted 194 of 200 transactions for deadlocks, deferred mode none. Writers read their version after the commit.
+  - Key-mapping triggers for joined tables.
+  - Snapshot loading from a read replica.
 
 ## Ecosystem track
 

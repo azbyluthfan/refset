@@ -100,8 +100,10 @@ func headOf(ctx context.Context, q querier, dataset string) (head, compacted uin
 }
 
 // CurrentVersions reads the current version of each dataset, for writers
-// using InstallTriggers: call it in the same transaction, after the writes, to
-// get the versions to send to clients.
+// using triggers instead of Write. With InstallTriggers (immediate mode) call
+// it in the same transaction, after the writes. With InstallDeferredTriggers
+// the version is assigned at commit, so call it on the pool after the commit;
+// read inside the transaction it would return the version before the write.
 func CurrentVersions(ctx context.Context, q querier, datasets ...string) (Versions, error) {
 	out := make(Versions, len(datasets))
 	for _, ds := range datasets {

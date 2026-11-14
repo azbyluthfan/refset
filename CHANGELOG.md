@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - **`Options.Reconcile`**: compares each periodic reload (`ReloadInterval`) with the version it replaces and counts entries that differ although the source reported no change to them, in the new `Stats().Divergences` (and `Stats().Reconciles`), with a warning in the log. It detects changes a source's feed missed: unlogged writes, manual edits, or a `ReloadSource` change made without bumping the version.
 - **`refset.SnapshotFile`**: wraps a source with a copy of the dataset on local disk. `Open` starts from the file and catches up through `Changes`; `GetFresh` fails closed until it has. The file is checked (checksum, dataset name, key and value types, optional `MaxAge`) and ignored if anything doesn't match. `Save` writes atomically with mode 0600 and refuses types gob would encode lossily. New `restart` example.
+- `examples/pgsource`: `InstallDeferredTriggers` and `InstallDeferredReloadTrigger`, a trigger mode that assigns versions at commit in sorted dataset order, so trigger-mode writers can't deadlock on version rows (immediate mode aborted 194 of 200 transactions in a 20-writer stress test; deferred mode none). Writers read their version with `CurrentVersions` after the commit. Needs PostgreSQL 13+.
 - `perfreport -sections memlimit`: sweeps `GOMEMLIMIT` from no limit to 1.25× of steady memory with `GOGC` 100 and off.
 
 ### Documentation

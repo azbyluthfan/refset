@@ -63,23 +63,25 @@ $fn$;
 // touches its table, in whatever order the SQL runs. Two transactions writing
 // tables A then B and B then A can deadlock; Postgres aborts one with
 // SQLSTATE 40P01, which the writer must retry (IsDeadlock). Nothing is
-// corrupted. Keep such transactions short and touch tables in a consistent
-// order.
+// corrupted. InstallDeferredTriggers avoids this by assigning versions at
+// commit in sorted order; prefer it for new installations.
 func InstallTriggers(ctx context.Context, pool *pgxpool.Pool, dataset, table, keyColumn string) error {
 	if keyColumn == "" {
-		return errors.New("pgsource: InstallTriggers needs a key column")
+		return errNoKeyColumn
 	}
-	return install(ctx, pool, dataset, table, keyColumn)
+	return install(ctx, pool, dataset, table, keyColumn, false)
 }
+
+var errNoKeyColumn = errors.New("pgsource: installing triggers needs a key column")
 
 // InstallReloadTrigger makes any change to table (for example a lookup table
 // a dataset joins) record that the whole dataset changed, so replicas reload
 // it.
 func InstallReloadTrigger(ctx context.Context, pool *pgxpool.Pool, dataset, table string) error {
-	return install(ctx, pool, dataset, table, "")
+	return install(ctx, pool, dataset, table, "", false)
 }
 
-func install(ctx context.Context, pool *pgxpool.Pool, dataset, table, keyColumn string) error {
+func install(ctx context.Context, pool *pgxpool.Pool, dataset, table, keyColumn string, deferred bool) error {
 	tbl := pgx.Identifier(strings.Split(table, ".")).Sanitize()
 	args := quoteLiteral(dataset)
 	if keyColumn != "" {
@@ -90,8 +92,15 @@ func install(ctx context.Context, pool *pgxpool.Pool, dataset, table, keyColumn 
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('refset_triggers'))`); err != nil {
 			return err
 		}
+		function := "refset_capture"
 		if _, err := tx.Exec(ctx, captureFunctionSQL); err != nil {
 			return fmt.Errorf("pgsource: create trigger function: %w", err)
+		}
+		if deferred {
+			function = "refset_capture_deferred"
+			if _, err := tx.Exec(ctx, deferredSchemaSQL); err != nil {
+				return fmt.Errorf("pgsource: create deferred trigger objects: %w", err)
+			}
 		}
 		triggers := []struct{ name, event, referencing string }{
 			{"ins", "INSERT", "NEW TABLE AS refset_new_rows"},
@@ -103,8 +112,8 @@ func install(ctx context.Context, pool *pgxpool.Pool, dataset, table, keyColumn 
 			stmt := fmt.Sprintf(`
 				CREATE OR REPLACE TRIGGER %s AFTER %s ON %s
 				REFERENCING %s
-				FOR EACH STATEMENT EXECUTE FUNCTION refset_capture(%s)`,
-				name, tr.event, tbl, tr.referencing, args)
+				FOR EACH STATEMENT EXECUTE FUNCTION %s(%s)`,
+				name, tr.event, tbl, tr.referencing, function, args)
 			if _, err := tx.Exec(ctx, stmt); err != nil {
 				return fmt.Errorf("pgsource: create trigger on %s: %w", table, err)
 			}
