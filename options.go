@@ -44,7 +44,8 @@ type Options struct {
 
 	// MaxConcurrentFallbacks caps KeyLoader calls in flight (after collapsing
 	// concurrent calls for the same key). Over the cap, reads get
-	// ErrNotCaughtUp. 0 means unlimited.
+	// ErrNotCaughtUp at once instead of adding to the source's load at the
+	// moment it is likely struggling. 0 means 32; -1 means unlimited.
 	MaxConcurrentFallbacks int
 
 	// ReloadInterval reloads the full snapshot periodically in the background,
@@ -70,10 +71,11 @@ type Options struct {
 }
 
 const (
-	defaultBatchWindow = 5 * time.Millisecond
-	defaultWaitBound   = 50 * time.Millisecond
-	defaultPoll        = time.Second
-	maxShards          = 1 << 16
+	defaultBatchWindow  = 5 * time.Millisecond
+	defaultMaxFallbacks = 32
+	defaultWaitBound    = 50 * time.Millisecond
+	defaultPoll         = time.Second
+	maxShards           = 1 << 16
 )
 
 type config struct {
@@ -136,8 +138,13 @@ func (o Options) resolve() (config, error) {
 		bad("MaxStaleness (%v) must be greater than PollInterval (%v), or a healthy replica fails between polls",
 			c.maxStaleness, c.pollInterval)
 	}
-	if c.maxFallbacks < 0 {
-		bad("MaxConcurrentFallbacks must not be negative, got %d", c.maxFallbacks)
+	switch {
+	case c.maxFallbacks == 0:
+		c.maxFallbacks = defaultMaxFallbacks
+	case c.maxFallbacks == -1:
+		c.maxFallbacks = 0 // unlimited
+	case c.maxFallbacks < 0:
+		bad("MaxConcurrentFallbacks must be positive, 0 (default 32) or -1 (unlimited), got %d", c.maxFallbacks)
 	}
 	if c.reloadInterval < 0 {
 		bad("ReloadInterval must not be negative, got %v", c.reloadInterval)
