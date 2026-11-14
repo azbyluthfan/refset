@@ -94,7 +94,7 @@ Questions the docs make claims about without having tested them, or where real d
 
 | Item | Question | How | Changes |
 |---|---|---|---|
-| **Tight memory limits** | How does GC CPU grow as `GOMEMLIMIT` approaches the dataset's size, and where should it sit? docs/performance.md says "well above twice the dataset" without a measurement | A perfreport section sweeping `GOMEMLIMIT` from 4× down to 1.2× the steady heap at 1M and 10M entries, with writes and application allocation; GC CPU, collections per second and reload behaviour at each step | A measured rule for `GOMEMLIMIT` and container sizing in docs/performance.md |
+| **Tight memory limits** (done 2026-11-14) | How does GC CPU grow as `GOMEMLIMIT` approaches the dataset's size, and where should it sit? | perfreport `-sections memlimit`: limits from none to 1.25× the steady Go memory, `GOGC` 100 and off, 1M and 10M entries ([results](benchmarks.md#memory-limits)) | Measured: 2× or more costs nothing; 1.5× is fine for large datasets; 1.25× multiplies collections several times over and makes rebuilding reloads overshoot. Rule in [performance.md](performance.md#tuning-the-gc-for-a-large-dataset) |
 | **The source side, with Postgres** | How long does `pgsource` take to load 1M and 10M rows, and what do N replicas do to the database? Every `Open` and reload number so far is in-process and leaves out the source's read time | Load and reload timings for `pgsource` and a `ReloadSource` over `dbrows`; 1–50 replicas polling and listening on one Postgres, measuring connections, idle-poll query rate and `NOTIFY` fan-out | Startup, reload and replica-count guidance in docs/performance.md and the examples README |
 
 #### P3b: machines, CPUs and operating systems
@@ -126,7 +126,7 @@ Questions the docs make claims about without having tested them, or where real d
 
 ## Correctness and operations track
 
-- **Reconcile check** (opt-in): a periodic reload that compares untouched keys before swapping, logs differences and counts them in `Stats().Divergences`, to detect changes the source never reported. Shares code with diff-on-reload.
+- ~~**Reconcile check**~~ **Done (unreleased):** `Options.Reconcile` compares each periodic reload with the version it replaces, skipping keys the source reported changing, and counts the rest in `Stats().Divergences` with a warning in the log.
 - **Local snapshot file** (opt-in) for faster restarts: start from disk, catch up through `Changes`; `GetFresh` fails closed until the first catch-up.
 - **pgsource:** deferred, sorted trigger variant (removes trigger-mode deadlocks); key-mapping triggers for joined tables; snapshot loading from a read replica.
 

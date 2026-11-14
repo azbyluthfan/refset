@@ -216,9 +216,9 @@ This is stated explicitly in `docs/guarantees.md`. Mitigations:
 |---|---|---|
 | Trigger capture (§6.3) | v0.1, Postgres example | Removes "forgot to log" for single-table datasets: every write is captured |
 | `Options.ReloadInterval` | v0.1, core, off by default | Periodic full reload in the background (e.g. hourly). Bounds how long a divergence can last; doesn't detect it |
-| Reconcile check | post-v0.1, core, opt-in | Periodic reload that also **diffs** before swapping and reports divergence (below) |
+| Reconcile check | v0.3, core, opt-in (`Options.Reconcile`) | Periodic reload that also **diffs** before swapping and reports divergence (below) |
 
-**Reconcile check (planned, post-v0.1).** The loop loads a fresh snapshot at version S while the replica is at version A. It fetches the changes between `min(A, S)` and `max(A, S)`, then compares the two snapshots on every key *not* touched in that range. Those keys must be equal; any difference means the feed missed a change. The loop logs it, counts it in `Stats().Divergences`, and swaps in the fresh snapshot. Values are compared with `reflect.DeepEqual` (stdlib), so no extra API is needed. If the range is unavailable (`ErrSnapshotRequired`), it swaps without comparing. This detects divergence generically, for any source, at the cost of one full load per interval.
+**Reconcile check (`Options.Reconcile`, needs `ReloadInterval`).** On each periodic reload the loop loads a fresh snapshot at version S while the replica is at version A. After the load it asks the source for every change since A (which covers S and anything committed during the load), then compares the two snapshots on every key *not* touched by those changes. Those keys must be equal; an added, changed or removed one means the feed missed a change. The loop counts them in `Stats().Divergences`, logs a warning with the count (not the keys, which are often user IDs), and installs the fresh snapshot. Values are compared with `==`, `ReloadSource.Equal`, or `reflect.DeepEqual` when neither applies; shards the reload kept unchanged are skipped, so the cost is small when little changed. If the changes since A are unavailable (`ErrSnapshotRequired`) or the source's history went backwards, it installs the snapshot without comparing. With `ReloadSource`, whose version doesn't move when an application forgets to bump it, this detects exactly that mistake.
 
 ### 4.11 Memory and CPU caches
 
@@ -602,7 +602,7 @@ Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of tail l
 | Users apply refset to frequently written or per-user data | "When not to use refset" section and modelling guidance (§4.9) |
 | Callers mutate shared values | Read-only rule documented on every read API; race tests; godoc example of the safe pattern |
 | Clients forge or inflate version headers | Request-triggered polls are coalesced (at most ~one extra `Changes` call per poll duration); `ErrVersionAhead` without fallback; optional HMAC-signed header, recommended for public clients |
-| Source's change feed misses a change (unlogged write, joined table, manual edit), so replicas diverge while `GetFresh` reports fresh | Stated in `docs/guarantees.md` (§4.10); trigger capture; `ReloadInterval` bounds the duration; reconcile check post-v0.1 detects it |
+| Source's change feed misses a change (unlogged write, joined table, manual edit), so replicas diverge while `GetFresh` reports fresh | Stated in `docs/guarantees.md` (§4.10); trigger capture; `ReloadInterval` bounds the duration; `Options.Reconcile` detects it and counts it in `Stats().Divergences` |
 | Postgres example pointed at a read replica | `NewSource` refuses a standby (`pg_is_in_recovery()`); documented primary requirement |
 | Trigger mode deadlocks between uncontrolled writers | Postgres aborts one (`40P01`), no corruption; documented retry advice; deferred, sorted trigger variant post-v0.1 |
 | Fallback stampede when a replica falls behind | Per-key collapsing; optional `MaxConcurrentFallbacks` |

@@ -40,11 +40,16 @@ Pauses stayed under 1 ms in every measurement.
 Go starts a collection when the heap has grown by `GOGC` percent (default 100) over the live heap of the last one. A dataset is long-lived, so it raises the live heap and with it the point where the next collection starts:
 
 - **Without a memory limit**, a 150 MB dataset lets the heap grow to about 300 MB before collecting. Collections are rarer, but the process uses about twice the dataset's size. That is usually fine and needs no tuning.
-- **In a container with a memory limit**, set `GOMEMLIMIT` to about 90% of the container's limit. The GC then works harder only when the heap approaches it, instead of letting the process be killed. Keep the limit well above twice the dataset (or 1.2× with diffed reloads), or the GC will run continuously.
+- **In a container with a memory limit**, set `GOMEMLIMIT` to about 90% of the container's limit, so the GC works harder as memory approaches it instead of the process being killed. Size the container from the process's *steady* Go memory (what the runtime holds right after a collection; `runtime/metrics` reports it, see below), [measured](benchmarks.md#memory-limits):
+  - **2× steady or more:** no measurable cost; GC CPU is the same as without a limit.
+  - **1.5×:** fine for large datasets; for small ones whose application allocates fast, GC CPU roughly doubles (1M entries at 100 MB/s: 3% → 7% of a core).
+  - **1.25×:** collections run several times more often (1M entries: 0.7 → 3.5 per second, 17% of a core). Avoid it.
+  - **Datasets whose reloads rebuild everything** (values `==` can't compare and no `ReloadSource.Equal`) need room for a second copy during each reload: at 1.25× a rebuild took 3× longer and still went over the limit. Keep at least 2× for them.
+- **`GOGC=off` with `GOMEMLIMIT`** makes the GC collect only near the limit: nearly free with plenty of headroom, but memory grows to the limit before every collection. Use it only when the container's memory is reserved for the process anyway.
 - **If GC CPU is high and memory is plentiful**, raise `GOGC` (for example 200). Each collection still marks the whole dataset, but they come half as often.
 - **Don't lower `GOGC` to save memory** with a large dataset: every collection marks it, so collections become frequent and expensive. Use `GOMEMLIMIT` instead.
 
-Measure before tuning: `GODEBUG=gctrace=1` prints each collection, and `runtime/metrics` reports GC CPU (`/cpu/classes/gc/total:cpu-seconds`). `Stats()` shows refset's side: `ShardsCopied`, `EntriesCopied` and `ShardsKept` say how much each change and reload copies.
+Measure before tuning: `GODEBUG=gctrace=1` prints each collection, `runtime/metrics` reports GC CPU (`/cpu/classes/gc/total:cpu-seconds`) and the memory `GOMEMLIMIT` counts (`/memory/classes/total:bytes` minus `/memory/classes/heap/released:bytes`). `Stats()` shows refset's side: `ShardsCopied`, `EntriesCopied` and `ShardsKept` say how much each change and reload copies.
 
 ## Large datasets and nested values
 

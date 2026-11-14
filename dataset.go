@@ -58,6 +58,8 @@ type Dataset[K comparable, V any] struct {
 	shardsCopied  atomic.Uint64
 	entriesCopied atomic.Uint64
 	shardsKept    atomic.Uint64
+	reconciles    atomic.Uint64
+	divergences   atomic.Uint64
 	_             cacheLinePad
 
 	// Written by waiting reads and the loop under mu.
@@ -430,6 +432,16 @@ func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], hea
 	}
 	d.reloads.Add(1)
 	d.recordCopies(st)
+	if full && d.cfg.reconcile {
+		if n, ok := d.reconcile(cur, next); ok {
+			d.reconciles.Add(1)
+			d.divergences.Add(uint64(n))
+			if n > 0 {
+				d.log.Warn("refset: reconcile found entries that differ from the source without a reported change; the source's change feed missed them",
+					"count", n, "applied", cur.version, "reloaded", next.version)
+			}
+		}
+	}
 	if next.version < cur.version {
 		d.log.Warn("refset: source history went backwards; reloaded at an older version",
 			"applied", cur.version, "reloaded", next.version)

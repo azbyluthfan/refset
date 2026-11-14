@@ -52,6 +52,16 @@ type Options struct {
 	// replica diverged. 0 means never.
 	ReloadInterval time.Duration
 
+	// Reconcile compares each periodic reload (ReloadInterval) with the
+	// version it replaces, and counts entries that differ although the source
+	// reported no change to them: changes the source's feed missed, such as
+	// an unlogged write or a ReloadSource change made without bumping the
+	// version. They are counted in Stats().Divergences and logged as a
+	// warning (the count, not the keys); the reloaded data is installed
+	// either way. Costs one comparison of the dataset per interval, less
+	// when the reload kept unchanged shards. Needs ReloadInterval.
+	Reconcile bool
+
 	// Clock supplies time. nil means the system clocks.
 	Clock Clock
 
@@ -75,6 +85,7 @@ type config struct {
 	maxLag         uint64
 	maxFallbacks   int
 	reloadInterval time.Duration
+	reconcile      bool
 	clock          Clock
 	log            *slog.Logger
 }
@@ -89,6 +100,7 @@ func (o Options) resolve() (config, error) {
 		maxLag:         o.MaxLagVersions,
 		maxFallbacks:   o.MaxConcurrentFallbacks,
 		reloadInterval: o.ReloadInterval,
+		reconcile:      o.Reconcile,
 		clock:          o.Clock,
 		log:            o.Logger,
 	}
@@ -129,6 +141,9 @@ func (o Options) resolve() (config, error) {
 	}
 	if c.reloadInterval < 0 {
 		bad("ReloadInterval must not be negative, got %v", c.reloadInterval)
+	}
+	if c.reconcile && c.reloadInterval == 0 {
+		bad("Reconcile needs ReloadInterval: it compares each periodic reload")
 	}
 	if c.clock == nil {
 		c.clock = systemClock{}

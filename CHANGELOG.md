@@ -4,6 +4,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **`Options.Reconcile`**: compares each periodic reload (`ReloadInterval`) with the version it replaces and counts entries that differ although the source reported no change to them, in the new `Stats().Divergences` (and `Stats().Reconciles`), with a warning in the log. It detects changes a source's feed missed: unlogged writes, manual edits, or a `ReloadSource` change made without bumping the version.
+- `perfreport -sections memlimit`: sweeps `GOMEMLIMIT` from no limit to 1.25× of steady memory with `GOGC` 100 and off.
+
+### Documentation
+
+- docs/performance.md: a measured rule for `GOMEMLIMIT` and container sizing (2× steady memory or more costs nothing; avoid 1.25×), replacing an unmeasured one.
+
 ## [0.2.0] - 2026-11-11
 
 Performance release: changes propagate in microseconds instead of after a fixed 5 ms window, large datasets produce about 13× less garbage per change, and reloads that change little no longer double memory. Reads are unchanged. Measurements in [docs/benchmarks.md](docs/benchmarks.md#after-the-p1-changes).
