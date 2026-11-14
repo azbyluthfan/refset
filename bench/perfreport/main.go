@@ -38,10 +38,14 @@ type config struct {
 	scaleN      int           // entries in the scale section
 	nestedSizes []int         // sizes in the nested section
 	gcDurLarge  time.Duration // GC cells with a large heap, which collects rarely
+
+	memlimitSizes []int           // sizes in the memlimit section
+	memlimitKinds map[string]bool // value kinds: comparable, uncomparable
+	memlimitDur   time.Duration   // per GC cell in the memlimit section
 }
 
 func main() {
-	sections := flag.String("sections", "tail,prop,gc,mem", "comma-separated sections to run: tail, prop, gc, mem, and the heavier scale and nested")
+	sections := flag.String("sections", "tail,prop,gc,mem", "comma-separated sections to run: tail, prop, gc, mem, and the heavier scale, nested and memlimit")
 	sizes := flag.String("sizes", "10000,100000,1000000", "comma-separated dataset sizes")
 	dur := flag.Duration("dur", 3*time.Second, "duration of each read-latency cell")
 	gcDur := flag.Duration("gcdur", 5*time.Second, "duration of each GC cell")
@@ -51,6 +55,9 @@ func main() {
 	scaleN := flag.Int("scale", 4_000_000, "entries in the scale section (about 150 bytes each; keep the whole run well inside free RAM, or swapping distorts every number)")
 	nestedSizes := flag.String("nested-sizes", "100000,500000", "comma-separated sizes for the nested section (about 1.3 KB each)")
 	gcDurLarge := flag.Duration("gcdur-large", 30*time.Second, "duration of each GC cell in the scale and nested sections")
+	memlimitSizes := flag.String("memlimit-sizes", "1000000", "comma-separated sizes for the memlimit section")
+	memlimitKinds := flag.String("memlimit-kinds", "comparable,uncomparable", "value kinds for the memlimit section; uncomparable reloads hold two copies")
+	memlimitDur := flag.Duration("memlimit-dur", 15*time.Second, "duration of each GC cell in the memlimit section")
 	quick := flag.Bool("quick", false, "tiny sizes and durations, to check the tool runs")
 	flag.Parse()
 
@@ -63,7 +70,14 @@ func main() {
 		shards:     *shards,
 		scaleN:     *scaleN,
 		gcDurLarge: *gcDurLarge,
+
+		memlimitKinds: map[string]bool{},
+		memlimitDur:   *memlimitDur,
 	}
+	for _, k := range strings.Split(*memlimitKinds, ",") {
+		cfg.memlimitKinds[strings.TrimSpace(k)] = true
+	}
+	cfg.memlimitSizes = parseSizes(*memlimitSizes)
 	for _, s := range strings.Split(*sections, ",") {
 		cfg.sections[strings.TrimSpace(s)] = true
 	}
@@ -72,6 +86,7 @@ func main() {
 	if *quick {
 		cfg.sizes, cfg.nestedSizes, cfg.scaleN = []int{1000}, []int{1000}, 2000
 		cfg.gcDurLarge = cfg.gcDur
+		cfg.memlimitSizes, cfg.memlimitDur = []int{1000}, 200*time.Millisecond
 		cfg.dur, cfg.gcDur, cfg.samples = 200*time.Millisecond, 300*time.Millisecond, 10
 	}
 
@@ -100,6 +115,9 @@ func main() {
 	}
 	if cfg.sections["nested"] {
 		nestedSection(cfg)
+	}
+	if cfg.sections["memlimit"] {
+		memlimitSection(cfg)
 	}
 }
 
