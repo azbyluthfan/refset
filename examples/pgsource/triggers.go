@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -82,44 +83,115 @@ func InstallReloadTrigger(ctx context.Context, pool *pgxpool.Pool, dataset, tabl
 }
 
 func install(ctx context.Context, pool *pgxpool.Pool, dataset, table, keyColumn string, deferred bool) error {
-	tbl := pgx.Identifier(strings.Split(table, ".")).Sanitize()
 	args := quoteLiteral(dataset)
 	if keyColumn != "" {
 		args += ", " + quoteLiteral(keyColumn)
 	}
-	prefix := "refset_" + strings.NewReplacer(".", "_", `"`, "_").Replace(table) + "_"
+	function := "refset_capture"
+	if deferred {
+		function = "refset_capture_deferred"
+	}
+	return installTriggers(ctx, pool, triggerSpec{
+		dataset: dataset, table: table, function: function, args: args, deferred: deferred,
+	})
+}
+
+// triggerSpec is one dataset's set of statement triggers on one table.
+type triggerSpec struct {
+	dataset, table string
+	function, args string // trigger function and its literal arguments
+	deferred       bool   // also create the deferred-mode objects
+	// check, if set, runs inside the installing transaction before the
+	// triggers are created, to reject a bad configuration early.
+	check func(ctx context.Context, tx pgx.Tx) error
+}
+
+func installTriggers(ctx context.Context, pool *pgxpool.Pool, spec triggerSpec) error {
+	tbl := pgx.Identifier(strings.Split(spec.table, ".")).Sanitize()
 	return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('refset_triggers'))`); err != nil {
 			return err
 		}
-		function := "refset_capture"
-		if _, err := tx.Exec(ctx, captureFunctionSQL); err != nil {
-			return fmt.Errorf("pgsource: create trigger function: %w", err)
+		for _, sql := range []string{captureFunctionSQL, mapKeysFunctionSQL} {
+			if _, err := tx.Exec(ctx, sql); err != nil {
+				return fmt.Errorf("pgsource: create trigger function: %w", err)
+			}
 		}
-		if deferred {
-			function = "refset_capture_deferred"
+		if spec.deferred {
 			if _, err := tx.Exec(ctx, deferredSchemaSQL); err != nil {
 				return fmt.Errorf("pgsource: create deferred trigger objects: %w", err)
 			}
 		}
-		triggers := []struct{ name, event, referencing string }{
+		if spec.check != nil {
+			if err := spec.check(ctx, tx); err != nil {
+				return err
+			}
+		}
+		if err := dropLegacyTriggers(ctx, tx, spec.table, spec.dataset); err != nil {
+			return err
+		}
+		for _, tr := range []struct{ op, event, referencing string }{
 			{"ins", "INSERT", "NEW TABLE AS refset_new_rows"},
 			{"upd", "UPDATE", "OLD TABLE AS refset_old_rows NEW TABLE AS refset_new_rows"},
 			{"del", "DELETE", "OLD TABLE AS refset_old_rows"},
-		}
-		for _, tr := range triggers {
-			name := pgx.Identifier{prefix + tr.name}.Sanitize()
+		} {
 			stmt := fmt.Sprintf(`
 				CREATE OR REPLACE TRIGGER %s AFTER %s ON %s
 				REFERENCING %s
 				FOR EACH STATEMENT EXECUTE FUNCTION %s(%s)`,
-				name, tr.event, tbl, tr.referencing, function, args)
+				pgx.Identifier{triggerName(spec.table, spec.dataset, tr.op)}.Sanitize(),
+				tr.event, tbl, tr.referencing, spec.function, spec.args)
 			if _, err := tx.Exec(ctx, stmt); err != nil {
-				return fmt.Errorf("pgsource: create trigger on %s: %w", table, err)
+				return fmt.Errorf("pgsource: create trigger on %s: %w", spec.table, err)
 			}
 		}
 		return nil
 	})
+}
+
+// triggerName is unique per table, dataset and operation, so datasets that
+// share a table (a lookup table several datasets join, say) each keep their
+// own triggers. It stays within Postgres's 63-byte identifier limit.
+func triggerName(table, dataset, op string) string {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(table + "\x00" + dataset))
+	readable := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' {
+			return r
+		}
+		return '_'
+	}, dataset)
+	if len(readable) > 40 {
+		readable = readable[:40]
+	}
+	return fmt.Sprintf("refset_%s_%08x_%s", readable, h.Sum32(), op)
+}
+
+// dropLegacyTriggers removes this dataset's triggers named by earlier
+// versions (refset_<table>_<op>, one set per table, so a second dataset on
+// the same table replaced the first's). Another dataset's legacy trigger on
+// the same table is left alone.
+func dropLegacyTriggers(ctx context.Context, tx pgx.Tx, table, dataset string) error {
+	legacy := "refset_" + strings.NewReplacer(".", "_", `"`, "_").Replace(table) + "_"
+	rows, err := tx.Query(ctx, `
+		SELECT tgname FROM pg_trigger
+		WHERE tgrelid = $1::regclass AND tgname = ANY($2)
+		  AND tgnargs > 0 AND split_part(encode(tgargs, 'escape'), '\000', 1) = $3`,
+		table, []string{legacy + "ins", legacy + "upd", legacy + "del"}, dataset)
+	if err != nil {
+		return fmt.Errorf("pgsource: look for older triggers on %s: %w", table, err)
+	}
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return err
+	}
+	tbl := pgx.Identifier(strings.Split(table, ".")).Sanitize()
+	for _, n := range names {
+		if _, err := tx.Exec(ctx, "DROP TRIGGER "+pgx.Identifier{n}.Sanitize()+" ON "+tbl); err != nil {
+			return fmt.Errorf("pgsource: drop older trigger %s: %w", n, err)
+		}
+	}
+	return nil
 }
 
 // IsDeadlock reports whether err is a Postgres deadlock (SQLSTATE 40P01),

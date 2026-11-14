@@ -440,7 +440,8 @@ The row lock makes commit order equal version order (contract C2). The cost is t
 
 1. **Avoid the join** (§4.9 "derive instead of store"): replicate `tiers` as its own small dataset and join at read time. Each dataset then maps to one table, and key logging is straightforward.
 2. **Writer logs the affected keys:** the writer computes them inside the transaction (e.g. `SELECT user_id FROM user_plans WHERE tier = $1`) and passes them to `tx.LogUpsert`. Large key sets fall back to a reload through the backlog threshold.
-3. **Writer or trigger forces a reload:** `tx.LogReloadAll(dataset)` (or a reload-mode trigger on the joined table, below) records a marker; `Changes` returns `ErrSnapshotRequired` when a marker is in range, and replicas reload the full dataset. Right for rarely changed lookup tables.
+3. **A key-mapping trigger maps changed rows to keys:** `InstallKeyMappingTrigger(ctx, pool, mode, dataset, joinedTable, keysSQL)` runs `keysSQL` over the joined table's changed rows (available as `refset_changed`) and logs the dataset keys it returns, so only those keys are re-read. The query is checked when the trigger is installed.
+4. **Writer or trigger forces a reload:** `tx.LogReloadAll(dataset)` (or a reload-mode trigger on the joined table, below) records a marker; `Changes` returns `ErrSnapshotRequired` when a marker is in range, and replicas reload the full dataset. Right for rarely changed lookup tables.
 
 Single-table datasets need nothing extra. Key-mapping triggers (a trigger on a joined table that runs a query to find affected dataset keys) are deferred until there is demand.
 

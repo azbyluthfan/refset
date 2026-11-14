@@ -23,8 +23,10 @@
 //   - Every change to a replicated table must be logged, through Write or
 //     through InstallTriggers. Unlogged changes leave replicas diverged until
 //     their next reload (design §4.10).
-//   - Datasets built from joins must log the affected keys, or LogReloadAll /
-//     InstallReloadTrigger for changes to joined tables.
+//   - Datasets built from joins must capture changes to joined tables too:
+//     the writer logs the affected keys, InstallKeyMappingTrigger maps
+//     changed rows to keys with a query, or LogReloadAll /
+//     InstallReloadTrigger reload the whole dataset.
 package pgsource
 
 import (

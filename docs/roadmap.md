@@ -130,7 +130,8 @@ Questions the docs make claims about without having tested them, or where real d
 - ~~**Local snapshot file**~~ **Done (unreleased):** `refset.SnapshotFile` wraps a source; `Open` starts from the saved file (checksum, dataset name, type fingerprint and age checked; the source is used otherwise) and catches up through `Changes`; `GetFresh` fails closed until it has. 1M entries: `Save` 170 ms, 18 MB file, `Open` from the file 260 ms. How much faster that is than a real source's full load is part of the P3a Postgres measurement.
 - **pgsource:**
   - ~~Deferred, sorted trigger variant~~ **Done (unreleased):** `InstallDeferredTriggers` assigns versions at commit in sorted order. Under 20 concurrent writers in random table orders, immediate mode aborted 194 of 200 transactions for deadlocks, deferred mode none. Writers read their version after the commit.
-  - Key-mapping triggers for joined tables.
+  - ~~Key-mapping triggers for joined tables~~ **Done (unreleased):** `InstallKeyMappingTrigger` runs an application query over a joined table's changed rows and logs only the affected dataset keys, in immediate or deferred mode, instead of reloading the whole dataset.
+  - **Fixed:** triggers were named after their table only, so a second dataset with triggers on the same table silently replaced the first's. Names now include the dataset, and reinstalling removes that dataset's old-named triggers.
   - Snapshot loading from a read replica.
 
 ## Ecosystem track
