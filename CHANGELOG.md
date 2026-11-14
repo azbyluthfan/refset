@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- CI tests every change on Linux ARM64, Windows and macOS as well as Linux x86-64, as 32-bit x86, and with one or two CPUs; the weekly run adds s390x (big-endian) and 32-bit ARM under QEMU, WebAssembly (`wasip1`) under wasmtime, and perfreport on x86-64 and ARM64 runners. Supported platforms are listed in the README.
 - **`refsetexpvar`**: `Publish(d)` adds a dataset's `Stats` to an `expvar` map named `refset`, served at `/debug/vars`. A separate package, because importing `expvar` registers that handler on `http.DefaultServeMux`; still standard library only.
 - **`Dataset.GetForRequest`**: the new name of `GetCtx` (below).
 - Runnable examples for `SnapshotFile`, `Options.Reconcile`, `refsettest.DetectValueMutation` and `refsetexpvar.Publish` on pkg.go.dev.
@@ -31,6 +32,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- The tests didn't compile on 32-bit platforms (a test constant overflowed `int`). The library itself was unaffected.
 - A panic in a fallback (`KeyLoader`) call shared by several reads gave the other reads an empty "no such key" answer with no error. They now all get the `*PanicError`.
 - `Close` hung forever if the source ignored context cancellation; it now returns an error after 10 seconds.
 - `SnapshotFile` bounds the body length in a file's header by the file's real size before using it.

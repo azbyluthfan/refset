@@ -47,9 +47,10 @@ make bench-compare  # core benchmarks: latest release vs your working tree
 
 | Workflow | When | What |
 |---|---|---|
-| `ci.yml` | every push to `main` and every pull request | lint, zero-dependency check, tests with the race detector on Go 1.26 and 1.27, workflow and script checks, DCO |
+| `ci.yml` | every push to `main` and every pull request | lint (with gosec), zero-dependency check, tests with the race detector on Go 1.26 and 1.27 and on Linux ARM64, Windows and macOS, tests as 32-bit x86 and with 1–2 CPUs, workflow and script checks, DCO |
 | `examples.yml` | every push to `main` and every pull request | the examples module against Postgres 15 and 17, and every demo |
-| `weekly.yml` | Sundays, or by hand from the Actions tab | 45-minute soak, 5 minutes per fuzz target, govulncheck on all modules, newest Go and Postgres; a failure opens an issue |
+| `weekly.yml` | Sundays, or by hand from the Actions tab | 45-minute soak, 5 minutes per fuzz target, govulncheck on all modules, newest Go and Postgres, s390x and 32-bit ARM under QEMU, WebAssembly under wasmtime, perfreport on x86-64 and ARM64 for trends; a failure opens an issue |
+| `codeql.yml` | pushes to `main`, pull requests, weekly | CodeQL security-extended queries on all modules |
 | `release.yml` | a `vX.Y.Z` tag | the steps in [docs/releasing.md](docs/releasing.md) |
 
 Actions are pinned by commit SHA and updated by Dependabot.
