@@ -165,7 +165,10 @@ jobs:
         env:
           GOOS: wasip1
           GOARCH: wasm
-        run: go test . ./refsettest ./refsetexpvar ./internal/scenario
+        # -v: a hang here can't be reported by Go's own test timeout (on one
+        # thread without preemption its timer never runs), so the last
+        # "=== RUN" line is what names the test.
+        run: go test -v . ./refsettest ./refsetexpvar ./internal/scenario
 
   perf-trend:
     name: Performance trend (${{ matrix.os }})

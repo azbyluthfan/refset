@@ -7,6 +7,7 @@ import (
 	"maps"
 	"math/rand/v2"
 	"reflect"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -321,6 +322,9 @@ func testDuringWrites[K comparable, V any](t *testing.T, h Harness[K, V]) {
 			mu.Lock()
 			ops[v] = o
 			mu.Unlock()
+			// Let readers run: on a single thread without preemption
+			// (WebAssembly) this loop would otherwise never yield.
+			runtime.Gosched()
 		}
 	}()
 
