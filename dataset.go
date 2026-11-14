@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -58,6 +59,9 @@ type Dataset[K comparable, V any] struct {
 	shardsCopied  atomic.Uint64
 	entriesCopied atomic.Uint64
 	shardsKept    atomic.Uint64
+	reconciles    atomic.Uint64
+	divergences   atomic.Uint64
+	fromFile      atomic.Bool // started from a snapshot file and not yet caught up
 	_             cacheLinePad
 
 	// Written by waiting reads and the loop under mu.
@@ -81,28 +85,44 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 	if err != nil {
 		return nil, err
 	}
+	// Optional capabilities belong to the source itself, even when it is
+	// wrapped (SnapshotFile).
+	caps := src
+	if w, ok := src.(wrapped[K, V]); ok {
+		caps = w.unwrap()
+	}
 	d := &Dataset[K, V]{
 		src:      src,
 		name:     src.Name(),
 		cfg:      cfg,
 		base:     newLayout(1),
-		eq:       equalFor(src),
+		eq:       equalFor(caps),
 		kick:     make(chan struct{}, 1),
 		flights:  newFlights[K, V](cfg.maxFallbacks),
 		loopDone: make(chan struct{}),
 	}
 	d.log = cfg.log.With("dataset", d.name)
-	if kl, ok := src.(KeyLoader[K, V]); ok {
+	if kl, ok := caps.(KeyLoader[K, V]); ok {
 		d.loader = kl
 	}
 	start := cfg.clock.Now()
-	r, _, err := d.load(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("refset: open dataset %q: %w", d.name, err)
+	r, fromFile := d.loadFromFile(ctx)
+	if r == nil {
+		if r, _, err = d.load(ctx, nil); err != nil {
+			return nil, fmt.Errorf("refset: open dataset %q: %w", d.name, err)
+		}
 	}
 	d.root.Store(r)
 	d.knownHead.Store(r.version)
-	d.lastConfirmed.Store(&start)
+	if fromFile {
+		// Data from disk has never been confirmed current: GetFresh fails
+		// closed until the first successful refresh confirms it.
+		never := Reading{MonoNanos: start.MonoNanos - 1<<62, WallNanos: 0}
+		d.lastConfirmed.Store(&never)
+		d.fromFile.Store(true)
+	} else {
+		d.lastConfirmed.Store(&start)
+	}
 	d.lastApply.Store(start.WallNanos)
 
 	d.ctx, d.cancel = context.WithCancel(context.Background())
@@ -112,7 +132,30 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 		watch = nil
 	}
 	go d.loop(watch)
+	if fromFile {
+		d.kick <- struct{}{} // catch up with the source at once
+	}
 	return d, nil
+}
+
+// loadFromFile loads the snapshot file if the source has one and it is
+// usable. Any problem is logged and Open loads from the source instead.
+func (d *Dataset[K, V]) loadFromFile(ctx context.Context) (*root[K, V], bool) {
+	c, ok := d.src.(snapshotCache[K, V])
+	if !ok {
+		return nil, false
+	}
+	r, _, err := d.loadStaged(ctx, c.loadCached)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		d.log.Info("refset: no snapshot file yet; loading from the source")
+		return nil, false
+	case err != nil:
+		d.log.Warn("refset: snapshot file not used; loading from the source", "err", err)
+		return nil, false
+	}
+	d.log.Info("refset: started from snapshot file; catching up with the source", "version", r.version, "entries", r.n)
+	return r, true
 }
 
 // Name returns the dataset's name, as reported by its Source.
@@ -398,6 +441,7 @@ func (d *Dataset[K, V]) refresh(full bool) bool {
 		d.raiseHead(head)
 	}
 	d.lastConfirmed.Store(&start)
+	d.fromFile.Store(false)
 	d.finish(seq, head, true)
 	return true
 }
@@ -406,6 +450,11 @@ func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], hea
 	if !full {
 		var deltas []Delta[K, V]
 		head, deltas, err = d.src.Changes(d.ctx, cur.version)
+		if err == nil && head < cur.version && d.fromFile.Load() {
+			// The snapshot file is ahead of the source (its history was
+			// reset or restored): reload rather than fail every poll.
+			err = ErrSnapshotRequired
+		}
 		switch {
 		case errors.Is(err, ErrSnapshotRequired):
 			d.log.Info("refset: source requires a full snapshot", "applied", cur.version)
@@ -430,6 +479,16 @@ func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], hea
 	}
 	d.reloads.Add(1)
 	d.recordCopies(st)
+	if full && d.cfg.reconcile {
+		if n, ok := d.reconcile(cur, next); ok {
+			d.reconciles.Add(1)
+			d.divergences.Add(uint64(n))
+			if n > 0 {
+				d.log.Warn("refset: reconcile found entries that differ from the source without a reported change; the source's change feed missed them",
+					"count", n, "applied", cur.version, "reloaded", next.version)
+			}
+		}
+	}
 	if next.version < cur.version {
 		d.log.Warn("refset: source history went backwards; reloaded at an older version",
 			"applied", cur.version, "reloaded", next.version)

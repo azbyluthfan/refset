@@ -38,22 +38,23 @@ So that nobody is surprised by `GetFresh`:
 
 ## What is not guaranteed
 
-- **Changes the source never reported.** If the backing store changes and the source's change feed doesn't record it (a writer that skips logging, logs the wrong dataset, a change to a joined table, a manual edit without triggers), replicas silently diverge from the source until their next full reload, **and `GetFresh` still reports them as fresh**: "fresh" means caught up with everything the source reported. Mitigations: capture writes with triggers (the Postgres example's `InstallTriggers`), and set `Options.ReloadInterval` to bound how long a divergence can last. A reconcile check that detects divergence is planned.
+- **Changes the source never reported.** If the backing store changes and the source's change feed doesn't record it (a writer that skips logging, logs the wrong dataset, a change to a joined table, a manual edit without triggers), replicas silently diverge from the source until their next full reload, **and `GetFresh` still reports them as fresh**: "fresh" means caught up with everything the source reported. Mitigations: capture writes with triggers (the Postgres example's `InstallTriggers`), set `Options.ReloadInterval` to bound how long a divergence can last, and set `Options.Reconcile` to detect it: each periodic reload is compared with the version it replaces, and entries that differ although the source reported no change to them are counted in `Stats().Divergences` and logged as a warning. Alert on that counter: a non-zero value means some writer, trigger or version bump is missing.
 - **Ordering across datasets.** Each dataset has its own version sequence and is applied independently. Even if two datasets change in one source transaction, a replica can briefly have the new version of one and the old version of the other. To read your own write across both, send both versions (`plans=51,perms=9`); each `GetCtx` waits for its own. Better still, avoid the need: derive values at read time, or merge datasets that always change together (see [design §4.9](design.md#49-modelling-guidance)).
 - **Fallback answers are not cached.** A `KeyLoader` answer is returned to that one caller. It doesn't update the replica or advance its version.
 - **Requests for versions that don't exist.** A version above the source's head, confirmed by a poll that started after the request arrived, gets `ErrVersionAhead` and no fallback. Header signing in `refsethttp` lets you ignore forged versions entirely.
 - **Write throughput.** refset has no write path; how fast a dataset can be written depends on the source. The Postgres example serializes writers per dataset.
-- **Persistence.** Nothing survives a restart (next section).
+- **Persistence.** By default nothing survives a restart; `SnapshotFile` keeps an optional copy on local disk (next section).
 
 ## Memory-only behavior
 
-The dataset lives only in process memory.
+The dataset lives in process memory.
 
-- **A restarted process starts empty.** `Open` loads the full dataset from the source and blocks until it is in memory, so reads are never served from a partial or empty dataset. If the source is unreachable, `Open` returns an error when its context ends.
+- **A restarted process starts empty** unless the source is wrapped in a `SnapshotFile`. `Open` loads the full dataset from the source and blocks until it is in memory, so reads are never served from a partial or empty dataset. If the source is unreachable, `Open` returns an error when its context ends.
+- **With `SnapshotFile`, a restart starts from the last saved file** and catches up with the source in the background. Until that first catch-up succeeds the data has not been confirmed current: `GetFresh` fails with `ErrTooStale` (when `MaxStaleness` or `MaxLagVersions` is set), `GetAtLeast` and `GetCtx` wait for the version a request asks for as usual, and `Get` serves the file's data, as any replica that is behind would. A file is used only if its checksum, dataset name and key and value types match (and it is younger than `MaxAge`, if set); otherwise `Open` loads from the source. If the source has compacted past the file's version, or its history is now behind it, the dataset reloads in full. Call `Save` on shutdown and periodically; it writes atomically.
 - **Report ready only after `Open` returns** (for example, a Kubernetes readiness probe).
 - **Startup time grows with dataset size** (see [benchmarks.md](benchmarks.md)).
 - **Roll restarts gradually.** Restarting every replica at once means every replica loads the full dataset from the source at the same moment.
-- **A reload holds two copies.** Reloads (after compacted history, a large backlog, a history reset or `ReloadInterval`) build the new version beside the old one and swap. The dataset must fit in memory twice.
+- **A reload may hold two copies.** Reloads (after compacted history, a large backlog, a history reset or `ReloadInterval`) build the new version beside the old one and swap. When values can be compared (`==`, or `ReloadSource.Equal`), unchanged shards are kept and a reload that changes little needs little extra memory; otherwise the dataset must fit in memory twice.
 - **Values are shared and read-only.** `Get` returns the value stored in the snapshot, shared with every other reader. If the value contains a map, slice or pointer, copy before modifying it, or every reader sees the change.
 
 ## Operating checklist

@@ -94,7 +94,7 @@ Questions the docs make claims about without having tested them, or where real d
 
 | Item | Question | How | Changes |
 |---|---|---|---|
-| **Tight memory limits** | How does GC CPU grow as `GOMEMLIMIT` approaches the dataset's size, and where should it sit? docs/performance.md says "well above twice the dataset" without a measurement | A perfreport section sweeping `GOMEMLIMIT` from 4× down to 1.2× the steady heap at 1M and 10M entries, with writes and application allocation; GC CPU, collections per second and reload behaviour at each step | A measured rule for `GOMEMLIMIT` and container sizing in docs/performance.md |
+| **Tight memory limits** (done 2026-11-14) | How does GC CPU grow as `GOMEMLIMIT` approaches the dataset's size, and where should it sit? | perfreport `-sections memlimit`: limits from none to 1.25× the steady Go memory, `GOGC` 100 and off, 1M and 10M entries ([results](benchmarks.md#memory-limits)) | Measured: 2× or more costs nothing; 1.5× is fine for large datasets; 1.25× multiplies collections several times over and makes rebuilding reloads overshoot. Rule in [performance.md](performance.md#tuning-the-gc-for-a-large-dataset) |
 | **The source side, with Postgres** | How long does `pgsource` take to load 1M and 10M rows, and what do N replicas do to the database? Every `Open` and reload number so far is in-process and leaves out the source's read time | Load and reload timings for `pgsource` and a `ReloadSource` over `dbrows`; 1–50 replicas polling and listening on one Postgres, measuring connections, idle-poll query rate and `NOTIFY` fan-out | Startup, reload and replica-count guidance in docs/performance.md and the examples README |
 
 #### P3b: machines, CPUs and operating systems
@@ -126,9 +126,13 @@ Questions the docs make claims about without having tested them, or where real d
 
 ## Correctness and operations track
 
-- **Reconcile check** (opt-in): a periodic reload that compares untouched keys before swapping, logs differences and counts them in `Stats().Divergences`, to detect changes the source never reported. Shares code with diff-on-reload.
-- **Local snapshot file** (opt-in) for faster restarts: start from disk, catch up through `Changes`; `GetFresh` fails closed until the first catch-up.
-- **pgsource:** deferred, sorted trigger variant (removes trigger-mode deadlocks); key-mapping triggers for joined tables; snapshot loading from a read replica.
+- ~~**Reconcile check**~~ **Done (unreleased):** `Options.Reconcile` compares each periodic reload with the version it replaces, skipping keys the source reported changing, and counts the rest in `Stats().Divergences` with a warning in the log.
+- ~~**Local snapshot file**~~ **Done (unreleased):** `refset.SnapshotFile` wraps a source; `Open` starts from the saved file (checksum, dataset name, type fingerprint and age checked; the source is used otherwise) and catches up through `Changes`; `GetFresh` fails closed until it has. 1M entries: `Save` 170 ms, 18 MB file, `Open` from the file 260 ms. How much faster that is than a real source's full load is part of the P3a Postgres measurement.
+- **pgsource:**
+  - ~~Deferred, sorted trigger variant~~ **Done (unreleased):** `InstallDeferredTriggers` assigns versions at commit in sorted order. Under 20 concurrent writers in random table orders, immediate mode aborted 194 of 200 transactions for deadlocks, deferred mode none. Writers read their version after the commit.
+  - ~~Key-mapping triggers for joined tables~~ **Done (unreleased):** `InstallKeyMappingTrigger` runs an application query over a joined table's changed rows and logs only the affected dataset keys, in immediate or deferred mode, instead of reloading the whole dataset.
+  - **Fixed:** triggers were named after their table only, so a second dataset with triggers on the same table silently replaced the first's. Names now include the dataset, and reinstalling removes that dataset's old-named triggers.
+  - ~~Snapshot loading from a read replica~~ **Done (unreleased):** `Table.SnapshotPool` reads full snapshots on a replica when catching up from its version will work, and on the primary otherwise. Checked against a real hot standby with replay paused.
 
 ## Ecosystem track
 

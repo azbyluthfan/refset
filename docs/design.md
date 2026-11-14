@@ -25,7 +25,7 @@ Reads are always local and lock-free. The network is used only in the background
 - **Not a general cache:** no eviction, no cache-on-miss. The whole dataset must fit in memory.
 - **Not for frequently written data.** Reference data is read on most requests, changed by humans or admin tools, and gives the same answer for every user. Carts, stock counts, seat holds and reservations don't fit: they are written constantly, are often per-user, and need an atomic compare-and-set at the source that no replica can give (see §4.9).
 - **No transactions across datasets:** each dataset has its own version sequence, and replicas apply datasets independently.
-- **No persistence:** a restarted process reloads from its source (§4.4).
+- **No persistence by default:** a restarted process reloads from its source (§4.4), unless the source is wrapped in an opt-in `SnapshotFile`, which starts from a copy on local disk and catches up.
 - **No infrastructure in the library:** the core is source-agnostic. Postgres is provided as an example source only (§6.3).
 
 ## 2. Core Concepts
@@ -125,7 +125,7 @@ The dataset lives only in process memory, so every process start (first deploy, 
   - Startup time grows with dataset size (published in `docs/benchmarks.md`).
   - Report ready (e.g. a Kubernetes readiness probe) only after `Open` returns.
   - Restarting many replicas at once means many full loads hitting the source together; roll restarts gradually.
-- Starting from a snapshot saved on local disk is a post-v0.1 option. If added, staleness counts from process start, so `GetFresh` fails closed until the first successful catch-up.
+- Starting from a snapshot saved on local disk: `SnapshotFile` (opt-in) wraps a source. `Open` loads the file into a separate version, falling back to the source if the checksum, dataset name, key and value type fingerprint or `MaxAge` doesn't match, then polls `Changes(fileVersion)` at once. Its last-confirmed time starts at "never", so `GetFresh` fails closed until the first successful catch-up. If the source compacted past the file or its history is behind it, the dataset reloads. Entries are encoded with `encoding/gob`; `Save` refuses types with unexported fields, which gob would drop, and writes atomically (temporary file, fsync, rename) with mode 0600.
 
 ### 4.5 Version-aware reads
 
@@ -216,9 +216,9 @@ This is stated explicitly in `docs/guarantees.md`. Mitigations:
 |---|---|---|
 | Trigger capture (§6.3) | v0.1, Postgres example | Removes "forgot to log" for single-table datasets: every write is captured |
 | `Options.ReloadInterval` | v0.1, core, off by default | Periodic full reload in the background (e.g. hourly). Bounds how long a divergence can last; doesn't detect it |
-| Reconcile check | post-v0.1, core, opt-in | Periodic reload that also **diffs** before swapping and reports divergence (below) |
+| Reconcile check | v0.3, core, opt-in (`Options.Reconcile`) | Periodic reload that also **diffs** before swapping and reports divergence (below) |
 
-**Reconcile check (planned, post-v0.1).** The loop loads a fresh snapshot at version S while the replica is at version A. It fetches the changes between `min(A, S)` and `max(A, S)`, then compares the two snapshots on every key *not* touched in that range. Those keys must be equal; any difference means the feed missed a change. The loop logs it, counts it in `Stats().Divergences`, and swaps in the fresh snapshot. Values are compared with `reflect.DeepEqual` (stdlib), so no extra API is needed. If the range is unavailable (`ErrSnapshotRequired`), it swaps without comparing. This detects divergence generically, for any source, at the cost of one full load per interval.
+**Reconcile check (`Options.Reconcile`, needs `ReloadInterval`).** On each periodic reload the loop loads a fresh snapshot at version S while the replica is at version A. After the load it asks the source for every change since A (which covers S and anything committed during the load), then compares the two snapshots on every key *not* touched by those changes. Those keys must be equal; an added, changed or removed one means the feed missed a change. The loop counts them in `Stats().Divergences`, logs a warning with the count (not the keys, which are often user IDs), and installs the fresh snapshot. Values are compared with `==`, `ReloadSource.Equal`, or `reflect.DeepEqual` when neither applies; shards the reload kept unchanged are skipped, so the cost is small when little changed. If the changes since A are unavailable (`ErrSnapshotRequired`) or the source's history went backwards, it installs the snapshot without comparing. With `ReloadSource`, whose version doesn't move when an application forgets to bump it, this detects exactly that mistake.
 
 ### 4.11 Memory and CPU caches
 
@@ -440,7 +440,8 @@ The row lock makes commit order equal version order (contract C2). The cost is t
 
 1. **Avoid the join** (§4.9 "derive instead of store"): replicate `tiers` as its own small dataset and join at read time. Each dataset then maps to one table, and key logging is straightforward.
 2. **Writer logs the affected keys:** the writer computes them inside the transaction (e.g. `SELECT user_id FROM user_plans WHERE tier = $1`) and passes them to `tx.LogUpsert`. Large key sets fall back to a reload through the backlog threshold.
-3. **Writer or trigger forces a reload:** `tx.LogReloadAll(dataset)` (or a reload-mode trigger on the joined table, below) records a marker; `Changes` returns `ErrSnapshotRequired` when a marker is in range, and replicas reload the full dataset. Right for rarely changed lookup tables.
+3. **A key-mapping trigger maps changed rows to keys:** `InstallKeyMappingTrigger(ctx, pool, mode, dataset, joinedTable, keysSQL)` runs `keysSQL` over the joined table's changed rows (available as `refset_changed`) and logs the dataset keys it returns, so only those keys are re-read. The query is checked when the trigger is installed.
+4. **Writer or trigger forces a reload:** `tx.LogReloadAll(dataset)` (or a reload-mode trigger on the joined table, below) records a marker; `Changes` returns `ErrSnapshotRequired` when a marker is in range, and replicas reload the full dataset. Right for rarely changed lookup tables.
 
 Single-table datasets need nothing extra. Key-mapping triggers (a trigger on a joined table that runs a query to find affected dataset keys) are deferred until there is demand.
 
@@ -457,13 +458,13 @@ Single-table datasets need nothing extra. Key-mapping triggers (a trigger on a j
 
 - The pool passed to `NewSource` must point at the primary. `NewSource` checks `SELECT pg_is_in_recovery()` on first use and returns an error if it is connected to a standby.
 - Through a connection pooler or load balancer, the route must go to the primary; the check also catches misrouting after a failover on reconnect.
-- Loading the full snapshot from a read replica is safe in principle (a consistent snapshot at an older version, then caught up from the primary) and could save primary load on startup, but is left for later. v0.1 reads everything from the primary.
+- **Full snapshots from a read replica** (`Table.SnapshotPool`): a replica's REPEATABLE READ snapshot is a consistent committed state at the replica's version (C1), and the dataset catches up from it through `Changes` on the primary. Before reading, `LoadSnapshot` checks on the primary that this catch-up will work: the replica's version is within the history the primary keeps, no reload marker follows it, and the backlog of changed keys is within `BacklogLimit`. Otherwise, or if the replica is unreachable, it reads from the primary, so a replica lagging far behind can't cause repeated reloads. Tested against a simulated lagging replica in CI and against a real hot standby with replay paused.
 
 **Example-level choices:** pgx v5 only (no `database/sql`; `LISTEN` and `REPEATABLE READ` are much cleaner with pgx); row scanning optional, defaulting to `pgx.RowToStructByName`; versions are `uint64` in Go and `bigint` in the database, with negative values rejected on read; changelog keys are text, encoded by `Table.KeyCodec` (default `strconv`/`fmt` for string and integer keys).
 
 **Optional trigger capture:** `InstallTriggers(ctx, pool, dataset, table, keyColumn)` installs a statement-level trigger (with transition tables) that bumps the version and logs changed keys, so writes made without `Write` (manual SQL, migrations, other services) are still captured. `InstallReloadTrigger(ctx, pool, dataset, joinedTable)` installs a trigger on a joined table that records a reload marker for the dataset on any change. Opt-in because some teams don't allow triggers. With triggers installed, `Write` only reads the new versions back inside the transaction.
 
-**Trigger mode can deadlock.** `Write` locks every declared version row up front in sorted order, so its writers never deadlock. Triggers can't do that: they lock a dataset's version row when a statement first touches its table, in whatever order the raw SQL runs. Two transactions updating tables A then B and B then A can deadlock. Postgres detects this and aborts one transaction with `deadlock detected` (SQLSTATE `40P01`), so nothing is corrupted, but the aborted writer must retry. Since trigger mode exists for writers you don't control, this is documented prominently with the advice: retry on `40P01`, keep transactions that touch several replicated tables short, and touch tables in a consistent order where you can. A variant that defers version assignment to commit time and locks in sorted order (a deferred constraint trigger) would remove this; it is planned for after v0.1, once prototyped.
+**Trigger mode can deadlock.** `Write` locks every declared version row up front in sorted order, so its writers never deadlock. Triggers can't do that: they lock a dataset's version row when a statement first touches its table, in whatever order the raw SQL runs. Two transactions updating tables A then B and B then A can deadlock. Postgres detects this and aborts one transaction with `deadlock detected` (SQLSTATE `40P01`), so nothing is corrupted, but the aborted writer must retry. Since trigger mode exists for writers you don't control, this is documented prominently with the advice: retry on `40P01`, keep transactions that touch several replicated tables short, and touch tables in a consistent order where you can. `InstallDeferredTriggers` removes this: statement triggers only record changed keys in `refset_pending`, and a deferred constraint trigger, fired once per transaction at commit, locks the touched datasets' version rows in sorted order, bumps them, writes the changelog and notifies. Under 20 concurrent writers touching four tables in random orders, immediate mode aborted 194 of 200 transactions for deadlocks and deferred mode none. Because the version is assigned at commit, a writer reads it with `CurrentVersions` after the commit.
 
 ## 7. Repository Layout
 
@@ -602,12 +603,12 @@ Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of tail l
 | Users apply refset to frequently written or per-user data | "When not to use refset" section and modelling guidance (§4.9) |
 | Callers mutate shared values | Read-only rule documented on every read API; race tests; godoc example of the safe pattern |
 | Clients forge or inflate version headers | Request-triggered polls are coalesced (at most ~one extra `Changes` call per poll duration); `ErrVersionAhead` without fallback; optional HMAC-signed header, recommended for public clients |
-| Source's change feed misses a change (unlogged write, joined table, manual edit), so replicas diverge while `GetFresh` reports fresh | Stated in `docs/guarantees.md` (§4.10); trigger capture; `ReloadInterval` bounds the duration; reconcile check post-v0.1 detects it |
+| Source's change feed misses a change (unlogged write, joined table, manual edit), so replicas diverge while `GetFresh` reports fresh | Stated in `docs/guarantees.md` (§4.10); trigger capture; `ReloadInterval` bounds the duration; `Options.Reconcile` detects it and counts it in `Stats().Divergences` |
 | Postgres example pointed at a read replica | `NewSource` refuses a standby (`pg_is_in_recovery()`); documented primary requirement |
-| Trigger mode deadlocks between uncontrolled writers | Postgres aborts one (`40P01`), no corruption; documented retry advice; deferred, sorted trigger variant post-v0.1 |
+| Trigger mode deadlocks between uncontrolled writers | Immediate mode: Postgres aborts one (`40P01`), no corruption, retry advice. Deferred mode (`InstallDeferredTriggers`) assigns versions at commit in sorted order and doesn't deadlock on them |
 | Fallback stampede when a replica falls behind | Per-key collapsing; optional `MaxConcurrentFallbacks` |
 | Copy-on-write cost for very large datasets | Sharding plus batching; the shard count follows the dataset's size; measured up to 10M entries |
-| Slow startup or source overload after mass restarts | Documented: readiness after `Open`, gradual rollouts; startup cost published; local snapshot file as a later option |
+| Slow startup or source overload after mass restarts | Documented: readiness after `Open`, gradual rollouts; startup cost published; opt-in `SnapshotFile` restarts from local disk |
 | Clients not echoing the version header | Read-your-writes is opt-in; session-cookie alternative; revocation uses the staleness bound, which needs no client cooperation |
 | Clock problems on a replica | Staleness uses the larger of monotonic and wall elapsed time, so every clock error fails closed (§4.6) |
 | Postgres example: serialized writes too slow for some datasets | Documented; reference data is write-light; per-dataset version rows keep datasets independent |

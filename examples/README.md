@@ -19,6 +19,7 @@ Runnable programs showing how to feed refset from different kinds of data, and t
 |---|---|---|---|
 | [`baseline-lru`](baseline-lru/main.go) | A TTL cache keeps serving a stale plan after an upgrade; refset with a version answers correctly | Nothing | `go run ./baseline-lru` |
 | [`structs`](structs/main.go) | `ReloadSource` over plans the app holds in a slice; a change is visible at once to a request that asks for its version; `Equal` lets a reload keep the plans that didn't change, as `Stats` shows | Nothing | `go run ./structs` |
+| [`restart`](restart/main.go) | `SnapshotFile`: save the dataset to local disk, restart from it, and serve reads at once while catching up; `GetFresh` refuses until caught up | Nothing | `go run ./restart` |
 | [`httpjson`](httpjson/main.go) | `ReloadSource` over another service's JSON API with a version endpoint; replicas pick up a flag rollout change on their next poll | Nothing | `go run ./httpjson` |
 | [`dbrows`](dbrows/main.go) | `ReloadSource` over the app's own SQL that scans rows into structs, plus a one-row version counter the writer bumps in the same transaction; no refset tables or adapter | Postgres | `go run ./dbrows` |
 | [`currencies`](currencies/main.go) | A currency table served from memory with `pgsource`; an admin update reaches the replica through `NOTIFY` | Postgres | `go run ./currencies` |

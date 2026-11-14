@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **`Options.Reconcile`**: compares each periodic reload (`ReloadInterval`) with the version it replaces and counts entries that differ although the source reported no change to them, in the new `Stats().Divergences` (and `Stats().Reconciles`), with a warning in the log. It detects changes a source's feed missed: unlogged writes, manual edits, or a `ReloadSource` change made without bumping the version.
+- **`refset.SnapshotFile`**: wraps a source with a copy of the dataset on local disk. `Open` starts from the file and catches up through `Changes`; `GetFresh` fails closed until it has. The file is checked (checksum, dataset name, key and value types, optional `MaxAge`) and ignored if anything doesn't match. `Save` writes atomically with mode 0600 and refuses types gob would encode lossily. New `restart` example.
+- `examples/pgsource`: `InstallDeferredTriggers` and `InstallDeferredReloadTrigger`, a trigger mode that assigns versions at commit in sorted dataset order, so trigger-mode writers can't deadlock on version rows (immediate mode aborted 194 of 200 transactions in a 20-writer stress test; deferred mode none). Writers read their version with `CurrentVersions` after the commit. Needs PostgreSQL 13+.
+- `examples/pgsource`: `InstallKeyMappingTrigger` for datasets built from joins: a query maps a joined table's changed rows to the dataset keys they affect, so replicas re-read just those keys instead of reloading everything. Works in immediate and deferred mode; the query is checked at install.
+- `examples/pgsource`: `Table.SnapshotPool` reads full snapshots on a read replica to spare the primary when many processes start or reload. It is used only when catching up from the replica's version through the primary will work (no compaction past it, no reload marker after it, backlog within `BacklogLimit`); otherwise, or when the replica is unreachable, snapshots come from the primary.
+- `perfreport -sections memlimit`: sweeps `GOMEMLIMIT` from no limit to 1.25× of steady memory with `GOGC` 100 and off.
+
+### Fixed
+
+- `examples/pgsource`: triggers were named after their table only, so installing triggers for a second dataset on the same table silently replaced the first dataset's, which then missed every change. Trigger names now include the dataset; reinstalling removes that dataset's triggers with the old names, and leaves other datasets' alone.
+
+### Documentation
+
+- docs/performance.md: a measured rule for `GOMEMLIMIT` and container sizing (2× steady memory or more costs nothing; avoid 1.25×), replacing an unmeasured one.
+
 ## [0.2.0] - 2026-11-11
 
 Performance release: changes propagate in microseconds instead of after a fixed 5 ms window, large datasets produce about 13× less garbage per change, and reloads that change little no longer double memory. Reads are unchanged. Measurements in [docs/benchmarks.md](docs/benchmarks.md#after-the-p1-changes).

@@ -196,7 +196,7 @@ It does not fit carts, stock counts, seat holds, reservations or sessions: data 
 
 ## Operating refset
 
-- The dataset lives in memory: a restarted process reloads it in `Open` and reports ready only after that. Roll restarts gradually.
+- The dataset lives in memory: a restarted process reloads it in `Open` and reports ready only after that. Roll restarts gradually. To restart from local disk instead, wrap the source in `refset.SnapshotFile` and `Save` on shutdown ([restart example](examples/restart/main.go)).
 - A reload holds two copies of the dataset while it swaps.
 - Values are shared between readers: treat them as read-only.
 - Keep a real `PollInterval`; set `MaxStaleness` to at least 2× it for fail-closed reads.

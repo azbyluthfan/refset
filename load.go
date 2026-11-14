@@ -21,7 +21,7 @@ import (
 func (d *Dataset[K, V]) load(ctx context.Context, prev *root[K, V]) (*root[K, V], copyStats, error) {
 	fixed := d.cfg.shards > 0
 	if !fixed && prev == nil {
-		return d.loadStaged(ctx)
+		return d.loadStaged(ctx, d.src.LoadSnapshot)
 	}
 	shards := d.cfg.shards
 	if !fixed {
@@ -65,10 +65,11 @@ func (d *Dataset[K, V]) loadInto(ctx context.Context, l layout, hint int) (*root
 	return newRoot(version, l, shards), nil
 }
 
-// loadStaged collects the entries before building shards, so the shard count
-// can be chosen from the dataset's size and every shard map created at its
-// final size. Staging costs one slice of entries, smaller than the maps.
-func (d *Dataset[K, V]) loadStaged(ctx context.Context) (*root[K, V], copyStats, error) {
+// loadStaged collects the entries from load before building shards, so the
+// shard count can be chosen from the dataset's size (unless Options.Shards
+// fixes it) and every shard map created at its final size. Staging costs one
+// slice of entries, smaller than the maps.
+func (d *Dataset[K, V]) loadStaged(ctx context.Context, load func(context.Context, func(K, V)) (uint64, error)) (*root[K, V], copyStats, error) {
 	type entry struct {
 		k K
 		v V
@@ -79,7 +80,7 @@ func (d *Dataset[K, V]) loadStaged(ctx context.Context) (*root[K, V], copyStats,
 	var chunks [][]entry
 	var cur []entry
 	total := 0
-	version, err := d.src.LoadSnapshot(ctx, func(k K, v V) {
+	version, err := load(ctx, func(k K, v V) {
 		if len(cur) == cap(cur) {
 			if cur != nil {
 				chunks = append(chunks, cur)
@@ -94,6 +95,9 @@ func (d *Dataset[K, V]) loadStaged(ctx context.Context) (*root[K, V], copyStats,
 	}
 	chunks = append(chunks, cur)
 	n := autoShards(total)
+	if d.cfg.shards > 0 {
+		n = d.cfg.shards
+	}
 	l := d.base.withShards(n)
 	shards := sizedShards[K, V](n, total)
 	for i, c := range chunks {

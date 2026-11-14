@@ -19,12 +19,15 @@
 //
 //   - The pool must point at the primary. Every read checks
 //     pg_is_in_recovery() and fails with ErrStandby on a standby, because a
-//     lagging copy breaks read-your-writes (Source contract C3, C6).
+//     lagging copy breaks read-your-writes (Source contract C3, C6). Full
+//     snapshots alone may come from a replica: see Table.SnapshotPool.
 //   - Every change to a replicated table must be logged, through Write or
 //     through InstallTriggers. Unlogged changes leave replicas diverged until
 //     their next reload (design §4.10).
-//   - Datasets built from joins must log the affected keys, or LogReloadAll /
-//     InstallReloadTrigger for changes to joined tables.
+//   - Datasets built from joins must capture changes to joined tables too:
+//     the writer logs the affected keys, InstallKeyMappingTrigger maps
+//     changed rows to keys with a query, or LogReloadAll /
+//     InstallReloadTrigger reload the whole dataset.
 package pgsource
 
 import (
@@ -100,8 +103,10 @@ func headOf(ctx context.Context, q querier, dataset string) (head, compacted uin
 }
 
 // CurrentVersions reads the current version of each dataset, for writers
-// using InstallTriggers: call it in the same transaction, after the writes, to
-// get the versions to send to clients.
+// using triggers instead of Write. With InstallTriggers (immediate mode) call
+// it in the same transaction, after the writes. With InstallDeferredTriggers
+// the version is assigned at commit, so call it on the pool after the commit;
+// read inside the transaction it would return the version before the write.
 func CurrentVersions(ctx context.Context, q querier, datasets ...string) (Versions, error) {
 	out := make(Versions, len(datasets))
 	for _, ds := range datasets {

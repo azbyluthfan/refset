@@ -25,6 +25,10 @@ type Stats struct {
 	ShardsCopied  uint64 // shards copied by applies or rebuilt by reloads
 	EntriesCopied uint64 // entries in the shards applies copied
 	ShardsKept    uint64 // shards reloads kept because nothing in them changed
+
+	// Reconcile check (Options.Reconcile).
+	Reconciles  uint64 // periodic reloads compared with the version they replaced
+	Divergences uint64 // entries found different without a reported change, in total
 }
 
 // Stats returns a point-in-time description of the dataset.
@@ -51,5 +55,7 @@ func (d *Dataset[K, V]) Stats() Stats {
 		ShardsCopied:   d.shardsCopied.Load(),
 		EntriesCopied:  d.entriesCopied.Load(),
 		ShardsKept:     d.shardsKept.Load(),
+		Reconciles:     d.reconciles.Load(),
+		Divergences:    d.divergences.Load(),
 	}
 }

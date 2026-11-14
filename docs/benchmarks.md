@@ -297,6 +297,35 @@ Full reloads through `ReloadSource`, each changing one entry (median of 3). `Loa
 - **Without `Equal`, a reload of nested values rebuilds every shard** (356 MB at 1M). A hand-written `Equal` cuts that to 116 MB, mostly `Load`'s own copy of the value slice, and the heap peak to 1.10×, but comparing every value made the reload 2.7× slower (445 vs 166 ms). Values comparable with `==` get both benefits automatically.
 - The flat `ReloadSource` rows peak higher (1.30–1.39×) than the 10M row (1.10×) because `Load` copies the value slice, which is large next to a small flat dataset.
 
+## Memory limits
+
+`go run ./perfreport -sections memlimit` (in `bench/`), 2026-11-14, v0.2.0 code, same machine on AC power, Low Power Mode off, no swap-outs. `GOMEMLIMIT` is set as a multiple of the process's steady Go memory: what the runtime holds right after a collection, counted the way the limit counts it (total minus memory returned to the OS). That includes the keys, the source's copy and the dataset: 222 MB at 1M entries, 2 GB at 10M. Holding: the application allocates 100 MB/s and the dataset takes no writes. Changes: 1,000 one-key changes a second. GC cells run 15 s (1M) and 30 s (10M).
+
+| Entries | Values | `GOGC` | Limit | Holding: GC CPU, collections/s | Changes: GC CPU, collections/s | Full reload |
+|---|---|---|---|---|---|---|
+| 1M | comparable | 100 | none | 3.0%, 0.67 | 0.7%, 0.13 | 203 ms |
+| 1M | comparable | 100 | 2× | 2.5%, 0.60 | 0.6%, 0.13 | 217 ms |
+| 1M | comparable | 100 | 1.5× | 6.8%, 1.4 | 1.0%, 0.20 | 214 ms |
+| 1M | comparable | 100 | 1.25× | 17.1%, 3.5 | 1.8%, 0.33 | 210 ms |
+| 1M | comparable | off | 4× | 0.7%, 0.13 | 0.0%, 0 | 227 ms |
+| 1M | comparable | off | 1.25× | 19.2%, 4.0 | 1.6%, 0.33 | 214 ms |
+| 1M | not comparable | 100 | none | 2.1%, 0.40 | 0.8%, 0.13 | 143 ms |
+| 1M | not comparable | 100 | 1.5× | 2.5%, 0.47 | 0.7%, 0.13 | 139 ms |
+| 1M | not comparable | 100 | 1.25× | 3.9%, 0.73 | 1.5%, 0.27 | 450 ms, over the limit (1.28×) |
+| 10M | comparable | 100 | none | 2.4%, 0.07 | 3.8%, 0.07 | 2.3 s |
+| 10M | comparable | 100 | 1.5× | 2.5%, 0.07 | 4.3%, 0.07 | 2.5 s |
+| 10M | comparable | 100 | 1.25× | 4.9%, 0.13 | 6.1%, 0.13 | 1.9 s |
+| 10M | comparable | off | 4× | 0.0%, 0 | 0.0%, 0 | 2.8 s |
+| 10M | comparable | off | 1.25× | 5.3%, 0.13 | 6.5%, 0.13 | 2.3 s |
+
+"Comparable" values let reloads keep unchanged shards; "not comparable" ones (a slice in the value, no `Equal`) rebuild the whole dataset on every reload. The 4× and 2× rows not shown matched the no-limit rows.
+
+- **A limit of 2× or more costs nothing measurable.** The GC behaves as if there were no limit.
+- **Below 2×, cost follows allocation rate over headroom.** With 100 MB/s of allocation, 1.25× leaves 55 MB of headroom at 1M entries, so collections run 5× more often (17% of a core); at 10M the headroom is 500 MB and the cost only doubles.
+- **Rebuilding reloads need a second copy's room.** At 1.25× the rebuilt dataset didn't fit: the reload took 3× longer while the GC ran flat out, and memory still went 2–3% over the limit (the limit is soft).
+- **`GOGC=off` with a limit** collects only near the limit: almost no GC CPU with 4× headroom, but Go memory grew to 2.5–3× steady before each collection.
+- Between collections Go memory rises to about 1.6× steady with `GOGC` 100 whatever the limit, which is why a reload's peak sampled in this run (1.4–1.6×) says more about the heap target than about the reload.
+
 ## Shard storage experiment (P2)
 
 Roadmap P2 asked whether replacing each shard's Go map with a custom table would make reads faster: hash the key once (the shard and the slot both come from one hash, where a map hashes again) and keep entries in one flat array that the CPU can prefetch. `BenchmarkShardStorage` compared the two with the same layout and automatic shard count, 6 runs each, 2026-11-11, string keys and `int` values. Two variants of an open-addressing table with linear probing, each slot holding (hash, key, value):
