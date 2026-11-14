@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"math"
 	"math/rand/v2"
 	"reflect"
 	"slices"
@@ -76,7 +77,7 @@ func samePtr(a, b any) bool { return reflect.ValueOf(a).Pointer() == reflect.Val
 
 func TestAutoShards(t *testing.T) {
 	for _, c := range []struct{ n, want int }{
-		{0, 16}, {10, 16}, {1000, 128}, {10_000, 256}, {100_000, 512}, {199_999, 512}, {200_000, 2048}, {1_000_000, 4096}, {1 << 40, maxShards},
+		{0, 16}, {10, 16}, {1000, 128}, {10_000, 256}, {100_000, 512}, {199_999, 512}, {200_000, 2048}, {1_000_000, 4096}, {math.MaxInt, maxShards},
 	} {
 		if got := autoShards(c.n); got != c.want {
 			t.Errorf("autoShards(%d) = %d, want %d", c.n, got, c.want)

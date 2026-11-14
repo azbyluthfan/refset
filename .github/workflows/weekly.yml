@@ -7,6 +7,11 @@
 #     advisories even in weeks without commits;
 #   - the newest Go release and the newest Postgres, so upstream releases
 #     that break the library or the examples show up before users report them.
+#   - big-endian (s390x) and 32-bit ARM under QEMU, and WebAssembly (wasip1)
+#     under wasmtime: too slow for every push;
+#   - a perfreport run on x86-64 and ARM64 runners, uploaded for comparing
+#     trends between architectures (shared runners are too noisy for exact
+#     numbers).
 # A failure opens an issue (or comments on the open one). Also runs from the
 # Actions tab ("Run workflow"), e.g. before a release (docs/releasing.md).
 
@@ -115,9 +120,73 @@ jobs:
           REFSET_PG_URL: postgres://refset:refset@localhost:5432/refset?sslmode=disable
         run: go test -race -count=1 ./...
 
+  emulated:
+    name: Emulated (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: s390x # big-endian
+            qemu: qemu-s390x
+          - arch: arm # 32-bit ARM
+            qemu: qemu-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+      - name: Install QEMU user-mode emulation
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user
+      - name: Tests under QEMU (slow; no race detector)
+        env:
+          GOARCH: ${{ matrix.arch }}
+          GOARM: "7"
+        run: go test -exec ${{ matrix.qemu }} ./...
+
+  wasm:
+    name: WebAssembly (wasip1)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+      - uses: bytecodealliance/actions/wasmtime/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1.1.3
+      - name: Tests under wasmtime (single-threaded; refsethttp needs real sockets and is left out)
+        env:
+          GOOS: wasip1
+          GOARCH: wasm
+        run: |
+          export PATH="$(go env GOROOT)/lib/wasm:$PATH"
+          go test . ./refsettest ./refsetexpvar ./internal/scenario
+
+  perf-trend:
+    name: Performance trend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+      - name: Read latency and GC on x86-64 and ARM64 (shared runners are noisy; for trends)
+        working-directory: bench
+        run: go run ./perfreport -sections tail,gc -sizes 100000,1000000 -dur 1s -gcdur 2s | tee "perf-${{ matrix.os }}.md"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-${{ matrix.os }}
+          path: bench/perf-${{ matrix.os }}.md
+
   report-failure:
     name: Report failure
-    needs: [soak, fuzz, security, latest]
+    needs: [soak, fuzz, security, latest, emulated, wasm, perf-trend]
     if: failure() && github.event_name == 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
