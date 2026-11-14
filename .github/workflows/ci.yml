@@ -1,5 +1,6 @@
 # Every push to main and every pull request: the library module on its own,
-# plus checks on the workflow files and scripts. Examples run in
+# on Linux (x86-64 and ARM64), Windows, macOS, 32-bit x86 and with one or two
+# CPUs, plus checks on the workflow files and scripts. Examples run in
 # examples.yml; slow checks (soak, long fuzzing) run in weekly.yml.
 # Actions are pinned by commit SHA; Dependabot updates them.
 
@@ -22,6 +23,7 @@ env:
   GOWORK: "off"
   GOLANGCI_LINT_VERSION: v2.15.0
   GOVULNCHECK_VERSION: v1.9.0
+  ACTIONLINT_VERSION: v1.7.12 # v1.7.4 didn't know the ubuntu-24.04-arm runner
 
 jobs:
   lint:
@@ -76,6 +78,39 @@ jobs:
           name: coverage
           path: coverage.out
 
+  platforms:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-24.04 (x86-64) runs in the test job above.
+        os: [ubuntu-24.04-arm, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+      - name: Test with race detector
+        run: go test -race -shuffle=on ./...
+
+  constrained:
+    name: Test (32-bit, 1-2 CPUs)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+      - name: 32-bit (386), natively; the race detector doesn't support 386
+        env:
+          GOARCH: "386"
+        run: go test -shuffle=on ./...
+      - name: GOMAXPROCS 1 and 2, as in a container limited to one or two CPUs
+        run: go test -race -cpu=1,2 ./...
+
   workflows:
     name: Workflows and scripts
     runs-on: ubuntu-24.04
@@ -84,8 +119,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: shellcheck
         run: shellcheck -S warning scripts/*.sh
-      - name: actionlint
-        run: docker run --rm -v "$PWD":/repo -w /repo rhysd/actionlint:1.7.4@sha256:82244e1db1c60d82c7792180a48dd0bcb838370bb589d53ff132503fc9485868
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+      - name: actionlint (also runs shellcheck, preinstalled on the runner, on run steps)
+        run: go run "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
 
   dco:
     name: DCO sign-off

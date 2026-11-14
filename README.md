@@ -44,7 +44,7 @@ More examples, and which one to read for your situation: [examples/README.md](ex
 
 ## Usage
 
-Requires Go 1.26 or newer. Install the latest release:
+Requires Go 1.26 or newer. Tested on every change on Linux (x86-64 and ARM64), Windows, macOS, 32-bit x86 and with one or two CPUs, and weekly on big-endian s390x, 32-bit ARM and WebAssembly (`wasip1`). Install the latest release:
 
 ```bash
 go get github.com/azbyluthfan/refset@latest
