@@ -10,7 +10,7 @@ import (
 )
 
 // A writer reports the version it produced; the client echoes it; Middleware
-// on the replica puts it in the request context for Dataset.GetCtx.
+// on the replica puts it in the request context for Dataset.GetForRequest.
 func Example() {
 	// Writer side (billing service), after committing version 51 of "plans".
 	w := httptest.NewRecorder()
@@ -23,7 +23,7 @@ func Example() {
 	refsethttp.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		v, _ := refset.MinVersion(r.Context(), "plans")
 		fmt.Println("handler must see plans at version", v, "or newer")
-		// plan, ok, err := plans.GetCtx(r.Context(), userID)
+		// plan, ok, err := plans.GetForRequest(r.Context(), userID)
 	})).ServeHTTP(httptest.NewRecorder(), r)
 
 	// Output:

@@ -7,10 +7,10 @@
 //
 // The client sends it back on its next requests (Refset-Min-Version:
 // plans=51), and Middleware on whichever replica receives it puts it in the
-// request context, where Dataset.GetCtx waits for that version:
+// request context, where Dataset.GetForRequest waits for that version:
 //
 //	mux.Handle("/reports", refsethttp.Middleware(handler))
-//	plan, ok, err := plans.GetCtx(r.Context(), userID)
+//	plan, ok, err := plans.GetForRequest(r.Context(), userID)
 //
 // Browsers can instead get the versions through cookies (Config.CookiePrefix),
 // which they echo automatically. Browser JavaScript reading the response
@@ -217,7 +217,7 @@ func (h *Handler) SetVersions(w http.ResponseWriter, versions map[string]uint64)
 
 // Middleware puts the minimum versions a request carries (header, and cookies
 // if enabled) into its context with refset.ContextWithMinVersion, so
-// Dataset.GetCtx waits for them. Malformed, oversized or (with signing)
+// Dataset.GetForRequest waits for them. Malformed, oversized or (with signing)
 // unsigned values are ignored; the request always proceeds.
 func (h *Handler) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

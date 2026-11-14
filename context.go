@@ -7,7 +7,7 @@ import (
 
 type minVersionsKey struct{}
 
-// ContextWithMinVersion returns a context that asks [Dataset.GetCtx] on the
+// ContextWithMinVersion returns a context that asks [Dataset.GetForRequest] on the
 // named dataset to return data at version v or newer. If the context already
 // carries a minimum for that dataset, the larger one is kept.
 //

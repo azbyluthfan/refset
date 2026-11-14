@@ -145,7 +145,7 @@ if err != nil {
 defer plans.Close()
 
 plan, ok := plans.Get(userID)                    // local, lock-free, never waits
-plan, ok, err = plans.GetCtx(r.Context(), userID) // waits for the version the request carries
+plan, ok, err = plans.GetForRequest(r.Context(), userID) // waits for the version the request carries
 perms, ok, err := permissions.GetFresh(userID)    // ErrTooStale if this replica can't confirm it's current
 ```
 

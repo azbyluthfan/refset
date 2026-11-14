@@ -46,7 +46,7 @@ func newPlanApp(t *testing.T, h *refsethttp.Handler, replicaDelay time.Duration)
 	t.Cleanup(billing.Close)
 
 	replica := httptest.NewServer(h.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tier, ok, err := plans.GetCtx(r.Context(), "user-1")
+		tier, ok, err := plans.GetForRequest(r.Context(), "user-1")
 		switch {
 		case err != nil || !ok:
 			http.Error(w, "plan unavailable", http.StatusServiceUnavailable)

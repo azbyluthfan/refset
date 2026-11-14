@@ -18,7 +18,7 @@ Reads are always local and lock-free. The network is used only in the background
 |---|---|---|---|---|---|
 | golang-lru, otter | Yes | No (TTL only) | No | No | No |
 | rueidis client-side caching | Yes | Per key, Redis only, asynchronous | No | No | No |
-| refset | Yes | Whole dataset, any source that meets the Source contract | Yes | Yes (`GetAtLeast`, `GetCtx`) | Yes (`GetFresh`) |
+| refset | Yes | Whole dataset, any source that meets the Source contract | Yes | Yes (`GetAtLeast`, `GetForRequest`) | Yes (`GetFresh`) |
 
 ### Non-goals (v1)
 
@@ -102,7 +102,7 @@ type KeyLoader[K comparable, V any] interface {
 | C6 | `KeyLoader.LoadKey`, if implemented, returns the source's current value, at a version ≥ any version it has reported | G4 |
 | C7 | `Name` is stable for the life of the source and matches the name writers use in version headers | G4 |
 
-Why the source owns the name: `GetCtx` must pick its dataset's entry out of a request's version map (`{"plans": 51, "perms": 9}`). A second copy of the name in `Options` could silently disagree, and then `GetCtx` would skip the wait and read-your-writes would quietly break. Docs recommend declaring each name once as a constant shared by the source and the writer.
+Why the source owns the name: `GetForRequest` must pick its dataset's entry out of a request's version map (`{"plans": 51, "perms": 9}`). A second copy of the name in `Options` could silently disagree, and then `GetForRequest` would skip the wait and read-your-writes would quietly break. Docs recommend declaring each name once as a constant shared by the source and the writer.
 
 ### 4.3 Update loop
 
@@ -138,7 +138,7 @@ The dataset lives only in process memory, so every process start (first deploy, 
     - **A poll that started after this request arrived** completes and the head is still below `minVersion` → `ErrVersionAhead`, with no fallback. Requiring a poll that started after the request matters: the writer committed before the client sent the request, so only such a poll is guaranteed to see the write.
   - On timeout: if the source implements `KeyLoader`, calls it; otherwise returns `ErrNotCaughtUp`. If `ctx` ends first, returns `ctx.Err()` without a fallback.
   - **Cost of inflated headers:** a forged `plans=999999999` or `plans=<head+1>` costs at most a share in one coalesced poll, never a dedicated source call or a fallback query. The source sees at most about one extra `Changes` call per poll duration, however many such requests arrive. For public-facing clients, enable header signing (§4.7) so forged versions are ignored before they reach the dataset.
-- `GetCtx(ctx, key)`: reads the minimum version for `src.Name()` from the context (set by `ContextWithMinVersion`, usually via `refsethttp.Middleware`) and behaves like `GetAtLeast`. With no version in the context, behaves like `Get`.
+- `GetForRequest(ctx, key)`: reads the minimum version for `src.Name()` from the context (set by `ContextWithMinVersion`, usually via `refsethttp.Middleware`) and behaves like `GetAtLeast`. With no version in the context, behaves like `Get`.
 - Waiters are kept in a min-heap by version and released when a batch is applied.
 - **Fallback calls are collapsed per key:** concurrent `KeyLoader` calls for the same key share one call (in-house singleflight, stdlib only). `Options.MaxConcurrentFallbacks` optionally caps calls in flight; over the cap, the request gets `ErrNotCaughtUp`.
 - Fallback answers are returned to the caller but never written into the snapshot and never advance the applied version.
@@ -198,7 +198,7 @@ The question a replica can answer, even when cut off, is "how long since I last 
 
 - **Derive instead of store.** If a Pro tier implies `reports:advanced`, keep a small `tier_perms` dataset and compute permissions at read time. An upgrade then writes one dataset, and replicas can never see the new plan with old permissions.
 - **Merge datasets that always change together** into one dataset: one version, applied together.
-- **Cross-dataset reads are not atomic on replicas.** Even when two datasets commit in one source transaction, a replica applies each independently, so for a few milliseconds it can see the new plan with the old permissions. To read your own write across both, send both versions (`plans=51,perms=9`); each `GetCtx` waits for its own. Requests without the header can still see the gap.
+- **Cross-dataset reads are not atomic on replicas.** Even when two datasets commit in one source transaction, a replica applies each independently, so for a few milliseconds it can see the new plan with the old permissions. To read your own write across both, send both versions (`plans=51,perms=9`); each `GetForRequest` waits for its own. Requests without the header can still see the gap.
 - **Keep multi-dataset writes short**: in the Postgres example, declared datasets stay locked until commit, so other writers to them wait.
 
 ### 4.10 What refset cannot detect: unlogged changes
@@ -247,7 +247,7 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 
 func (d *Dataset[K, V]) Get(key K) (V, bool)
 func (d *Dataset[K, V]) GetAtLeast(ctx context.Context, key K, minVersion uint64) (V, bool, error)
-func (d *Dataset[K, V]) GetCtx(ctx context.Context, key K) (V, bool, error)
+func (d *Dataset[K, V]) GetForRequest(ctx context.Context, key K) (V, bool, error)
 func (d *Dataset[K, V]) GetFresh(key K) (V, bool, error)
 func (d *Dataset[K, V]) Snapshot() Snapshot[K, V] // immutable; Version(), Get, Len, All() iter.Seq2[K, V]
 func (d *Dataset[K, V]) Version() uint64
@@ -382,7 +382,7 @@ plans, err := refset.Open(ctx, plansSrc, refset.Options{WaitBound: 50 * time.Mil
 
 mux.Handle("/v1/reports/advanced", refsethttp.Middleware(http.HandlerFunc(
     func(w http.ResponseWriter, r *http.Request) {
-        plan, ok, err := plans.GetCtx(r.Context(), currentUser(r))
+        plan, ok, err := plans.GetForRequest(r.Context(), currentUser(r))
         if err != nil || !ok {
             http.Error(w, "plan unavailable", http.StatusServiceUnavailable)
             return

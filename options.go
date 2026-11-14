@@ -21,11 +21,11 @@ type Options struct {
 	// notifications, so changes arriving close together are applied as one
 	// batch. A notification after a quiet period polls at once; one that
 	// arrives within BatchWindow of the last poll waits for the rest of the
-	// window. A read waiting for a version (GetAtLeast, GetCtx) always polls
+	// window. A read waiting for a version (GetAtLeast, GetForRequest) always polls
 	// at once. 0 means 5ms.
 	BatchWindow time.Duration
 
-	// WaitBound is how long GetAtLeast and GetCtx wait for a version before
+	// WaitBound is how long GetAtLeast and GetForRequest wait for a version before
 	// falling back. 0 means 50ms; -1 means never wait.
 	WaitBound time.Duration
 

@@ -71,7 +71,7 @@ func ExampleDataset_GetFresh() {
 	// Output: true
 }
 
-// GetCtx takes the minimum version from the request context, usually set by
+// GetForRequest takes the minimum version from the request context, usually set by
 // HTTP middleware from a Refset-Min-Version header.
 func ExampleContextWithMinVersion() {
 	src := refsettest.NewMemSource[string, Plan](PlansDataset)
@@ -80,7 +80,7 @@ func ExampleContextWithMinVersion() {
 	version := src.Upsert("user-1", Plan{Tier: "pro"})
 
 	ctx := refset.ContextWithMinVersion(context.Background(), PlansDataset, version)
-	p, _, err := plans.GetCtx(ctx, "user-1")
+	p, _, err := plans.GetForRequest(ctx, "user-1")
 	fmt.Println(p.Tier, err)
 	// Output: pro <nil>
 }

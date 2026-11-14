@@ -133,7 +133,7 @@ func newReplica(ctx context.Context, pool *pgxpool.Pool, name string, delay time
 	}
 	srv := httptest.NewServer(refsethttp.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		p, ok, err := plans.GetCtx(r.Context(), r.URL.Query().Get("user"))
+		p, ok, err := plans.GetForRequest(r.Context(), r.URL.Query().Get("user"))
 		took := time.Since(start).Round(time.Millisecond)
 		w.Header().Set("X-Took", took.String())
 		w.Header().Set("X-Replica", name)

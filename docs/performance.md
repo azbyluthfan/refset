@@ -90,6 +90,6 @@ Set `Shards` only to fix the count, for example to compare configurations.
 
 When changing the core:
 
-1. Nothing on the read path (`Get`, `Snapshot`, `GetFresh`, satisfied `GetAtLeast`/`GetCtx`) may write to shared memory or allocate. `TestReadPathDoesNotAllocate` checks the allocation half; reviewers check the other.
+1. Nothing on the read path (`Get`, `Snapshot`, `GetFresh`, satisfied `GetAtLeast`/`GetForRequest`) may write to shared memory or allocate. `TestReadPathDoesNotAllocate` checks the allocation half; reviewers check the other.
 2. New fields in `Dataset` go in the group that matches who writes them (read-hot, loop-written, waiter state). `TestDatasetFieldGroupsOnSeparateCacheLines` keeps the groups 128 bytes apart.
 3. Re-run `BenchmarkGetParallelWhilePolling` and the comparisons in `bench/` before a release, and update [benchmarks.md](benchmarks.md) if anything moves.

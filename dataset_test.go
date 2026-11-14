@@ -338,7 +338,7 @@ func TestContextCancelStopsWait(t *testing.T) {
 	}
 }
 
-func TestGetCtxUsesContextVersion(t *testing.T) {
+func TestGetForRequestUsesContextVersion(t *testing.T) {
 	src := newSrc()
 	src.Upsert("u1", 0)
 	d := open(t, src, quiet(refset.Options{WaitBound: 5 * time.Second}))
@@ -346,16 +346,16 @@ func TestGetCtxUsesContextVersion(t *testing.T) {
 	v := src.Upsert("u1", 1)
 
 	// No version in context: plain local read.
-	if got, _, err := d.GetCtx(context.Background(), "u1"); err != nil || got != 0 {
+	if got, _, err := d.GetForRequest(context.Background(), "u1"); err != nil || got != 0 {
 		t.Fatalf("no version: %d %v", got, err)
 	}
 	// Another dataset's version is ignored.
 	other := refset.ContextWithMinVersion(context.Background(), "perms", 99)
-	if got, _, err := d.GetCtx(other, "u1"); err != nil || got != 0 {
+	if got, _, err := d.GetForRequest(other, "u1"); err != nil || got != 0 {
 		t.Fatalf("other dataset: %d %v", got, err)
 	}
 	ctx := refset.ContextWithMinVersion(context.Background(), "plans", v)
-	if got, ok, err := d.GetCtx(ctx, "u1"); err != nil || !ok || got != 1 {
+	if got, ok, err := d.GetForRequest(ctx, "u1"); err != nil || !ok || got != 1 {
 		t.Fatalf("with version: %d %v %v", got, ok, err)
 	}
 }
@@ -463,5 +463,16 @@ func TestHistoryResetReloads(t *testing.T) {
 	eventually(t, "reload after reset", func() bool { return d.Stats().Reloads >= 1 })
 	if v, _ := d.Get("k"); v != 100 || d.Version() != 1 {
 		t.Fatalf("after reset: k=%d v%d", v, d.Version())
+	}
+}
+
+// GetCtx is kept for one release as a deprecated alias of GetForRequest.
+func TestGetCtxStillWorks(t *testing.T) {
+	src := newSrc()
+	v := src.Upsert("u1", 1)
+	d := open(t, src, quiet(refset.Options{}))
+	ctx := refset.ContextWithMinVersion(context.Background(), d.Name(), v)
+	if got, ok, err := d.GetCtx(ctx, "u1"); err != nil || !ok || got != 1 {
+		t.Fatalf("GetCtx = %d %v %v", got, ok, err)
 	}
 }
