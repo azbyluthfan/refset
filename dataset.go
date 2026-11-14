@@ -62,6 +62,7 @@ type Dataset[K comparable, V any] struct {
 	reconciles    atomic.Uint64
 	divergences   atomic.Uint64
 	fromFile      atomic.Bool // started from a snapshot file and not yet caught up
+	panics        atomic.Uint64
 	_             cacheLinePad
 
 	// Written by waiting reads and the loop under mu.
@@ -106,11 +107,9 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 		d.loader = kl
 	}
 	start := cfg.clock.Now()
-	r, fromFile := d.loadFromFile(ctx)
-	if r == nil {
-		if r, _, err = d.load(ctx, nil); err != nil {
-			return nil, fmt.Errorf("refset: open dataset %q: %w", d.name, err)
-		}
+	r, fromFile, err := d.openLoad(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("refset: open dataset %q: %w", d.name, err)
 	}
 	d.root.Store(r)
 	d.knownHead.Store(r.version)
@@ -126,7 +125,7 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 	d.lastApply.Store(start.WallNanos)
 
 	d.ctx, d.cancel = context.WithCancel(context.Background())
-	watch, err := src.Watch(d.ctx)
+	watch, err := d.watch()
 	if err != nil {
 		d.log.Warn("refset: watch unavailable; relying on polling", "err", err)
 		watch = nil
@@ -136,6 +135,33 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 		d.kick <- struct{}{} // catch up with the source at once
 	}
 	return d, nil
+}
+
+// openLoad is Open's first load, from the snapshot file or the source, with a
+// panic in either returned as a *PanicError.
+func (d *Dataset[K, V]) openLoad(ctx context.Context) (r *root[K, V], fromFile bool, err error) {
+	defer func() {
+		if p := recovered(recover()); p != nil {
+			d.panics.Add(1)
+			r, fromFile, err = nil, false, p
+		}
+	}()
+	if r, fromFile = d.loadFromFile(ctx); r != nil {
+		return r, fromFile, nil
+	}
+	r, _, err = d.load(ctx, nil)
+	return r, false, err
+}
+
+// watch calls Source.Watch, with a panic returned as a *PanicError.
+func (d *Dataset[K, V]) watch() (ch <-chan uint64, err error) {
+	defer func() {
+		if p := recovered(recover()); p != nil {
+			d.panics.Add(1)
+			ch, err = nil, p
+		}
+	}()
+	return d.src.Watch(d.ctx)
 }
 
 // loadFromFile loads the snapshot file if the source has one and it is
@@ -264,16 +290,25 @@ func (d *Dataset[K, V]) GetFresh(key K) (V, bool, error) {
 
 // Close stops the background loop and fails any waiting reads with ErrClosed.
 // Get and Snapshot keep serving the last version.
+//
+// Close waits for the loop to finish its current call to the source. If the
+// source ignores context cancellation and is still busy after 10 seconds,
+// Close returns an error saying so and leaves that call running.
 func (d *Dataset[K, V]) Close() error {
+	var err error
 	d.close.Do(func() {
 		d.cancel()
-		<-d.loopDone
+		select {
+		case <-d.loopDone:
+		case <-time.After(closeWait):
+			err = fmt.Errorf("refset: close dataset %q: the source did not return within %v of cancellation; it should honor its context", d.name, closeWait)
+		}
 		d.mu.Lock()
 		d.closed = true
 		d.waiters.releaseAll(ErrClosed)
 		d.mu.Unlock()
 	})
-	return nil
+	return err
 }
 
 // register adds a waiter for minVersion. It returns nil, nil if the version was
@@ -422,7 +457,7 @@ func (d *Dataset[K, V]) refresh(full bool) bool {
 	start := d.cfg.clock.Now()
 	d.polls.Add(1)
 	cur := d.root.Load()
-	next, head, reloaded, err := d.fetch(cur, full)
+	next, head, reloaded, err := d.safeFetch(cur, full)
 	if err != nil {
 		if d.ctx.Err() == nil {
 			d.pollErrors.Add(1)
@@ -444,6 +479,21 @@ func (d *Dataset[K, V]) refresh(full bool) bool {
 	d.fromFile.Store(false)
 	d.finish(seq, head, true)
 	return true
+}
+
+// safeFetch is fetch with a panic in source code (Changes, LoadSnapshot,
+// Equal, a ReloadSource's functions) recovered and returned as a
+// *PanicError: the poll fails and the dataset keeps its last version.
+func (d *Dataset[K, V]) safeFetch(cur *root[K, V], full bool) (next *root[K, V], head uint64, reloaded bool, err error) {
+	defer func() {
+		if p := recovered(recover()); p != nil {
+			d.panics.Add(1)
+			d.log.Error("refset: panic in source code; the poll failed and the dataset keeps its last version",
+				"panic", p.Value, "stack", string(p.Stack))
+			next, head, reloaded, err = nil, 0, false, p
+		}
+	}()
+	return d.fetch(cur, full)
 }
 
 func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], head uint64, reloaded bool, err error) {

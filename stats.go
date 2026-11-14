@@ -16,6 +16,7 @@ type Stats struct {
 	Polls          uint64    // refreshes attempted (changes or full reloads)
 	PollErrors     uint64
 	Reloads        uint64 // full snapshot loads after Open
+	Panics         uint64 // panics recovered in source code (see PanicError)
 	Fallbacks      uint64 // reads that timed out and went to KeyLoader
 
 	// Copy-on-write work, to judge the shard count (docs/performance.md).
@@ -50,6 +51,7 @@ func (d *Dataset[K, V]) Stats() Stats {
 		Polls:          d.polls.Load(),
 		PollErrors:     d.pollErrors.Load(),
 		Reloads:        d.reloads.Load(),
+		Panics:         d.panics.Load(),
 		Fallbacks:      d.fallbacks.Load(),
 		Applies:        d.applies.Load(),
 		ShardsCopied:   d.shardsCopied.Load(),
