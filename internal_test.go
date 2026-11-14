@@ -116,7 +116,7 @@ func TestOptionsResolve(t *testing.T) {
 		{MaxStaleness: -1},
 		{MaxStaleness: time.Second}, // equal to default PollInterval
 		{PollInterval: 2 * time.Second, MaxStaleness: time.Second},
-		{MaxConcurrentFallbacks: -1},
+		{MaxConcurrentFallbacks: -2},
 		{ReloadInterval: -1},
 	}
 	for _, o := range bad {

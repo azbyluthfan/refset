@@ -66,6 +66,19 @@ func (g *flights[K, V]) do(ctx context.Context, key K, fn func() (V, bool, error
 		}
 		close(f.done)
 	}()
-	f.v, f.ok, f.err = fn()
+	f.v, f.ok, f.err = call(fn)
 	return f.v, f.ok, f.err
+}
+
+// call runs fn, returning a panic as a *PanicError. Without this, a panic
+// would unwind past the flight with its zero result recorded, and every
+// follower would read "no such key" with no error.
+func call[V any](fn func() (V, bool, error)) (v V, ok bool, err error) {
+	defer func() {
+		if p := recovered(recover()); p != nil {
+			var zero V
+			v, ok, err = zero, false, p
+		}
+	}()
+	return fn()
 }

@@ -271,7 +271,7 @@ type Options struct {
     PollInterval           time.Duration // 0 → 1s
     MaxStaleness           time.Duration // 0 → unchecked; must exceed PollInterval
     MaxLagVersions         uint64        // 0 → unchecked
-    MaxConcurrentFallbacks int           // 0 → unlimited
+    MaxConcurrentFallbacks int           // 0 → 32; -1 → unlimited
     ReloadInterval         time.Duration // 0 → never; periodic full reload to bound unlogged-change divergence (§4.10)
     Clock                  Clock         // nil → real clocks (monotonic + wall)
     Logger                 *slog.Logger  // nil → discard
@@ -606,7 +606,7 @@ Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of tail l
 | Source's change feed misses a change (unlogged write, joined table, manual edit), so replicas diverge while `GetFresh` reports fresh | Stated in `docs/guarantees.md` (§4.10); trigger capture; `ReloadInterval` bounds the duration; `Options.Reconcile` detects it and counts it in `Stats().Divergences` |
 | Postgres example pointed at a read replica | `NewSource` refuses a standby (`pg_is_in_recovery()`); documented primary requirement |
 | Trigger mode deadlocks between uncontrolled writers | Immediate mode: Postgres aborts one (`40P01`), no corruption, retry advice. Deferred mode (`InstallDeferredTriggers`) assigns versions at commit in sorted order and doesn't deadlock on them |
-| Fallback stampede when a replica falls behind | Per-key collapsing; optional `MaxConcurrentFallbacks` |
+| Fallback stampede when a replica falls behind | Per-key collapsing; `MaxConcurrentFallbacks` defaults to 32 per dataset |
 | Copy-on-write cost for very large datasets | Sharding plus batching; the shard count follows the dataset's size; measured up to 10M entries |
 | Slow startup or source overload after mass restarts | Documented: readiness after `Open`, gradual rollouts; startup cost published; opt-in `SnapshotFile` restarts from local disk |
 | Clients not echoing the version header | Read-your-writes is opt-in; session-cookie alternative; revocation uses the staleness bound, which needs no client cooperation |

@@ -208,7 +208,7 @@ func testName[K comparable, V any](t *testing.T, h Harness[K, V]) {
 func testSequential[K comparable, V any](t *testing.T, h Harness[K, V]) {
 	ctx := ctxT(t)
 	m := newModel(t, h)
-	rng := rand.New(rand.NewPCG(1, 1))
+	rng := rand.New(rand.NewPCG(1, 1)) //nolint:gosec // random test operations, not security
 	head := m.first
 	for range 50 {
 		ops := randomOps(h, rng)
@@ -304,7 +304,7 @@ func testDuringWrites[K comparable, V any](t *testing.T, h Harness[K, V]) {
 	stop := make(chan struct{})
 	writerDone := make(chan error, 1)
 	go func() {
-		rng := rand.New(rand.NewPCG(2, 2))
+		rng := rand.New(rand.NewPCG(2, 2)) //nolint:gosec // random test operations, not security
 		for {
 			select {
 			case <-stop:

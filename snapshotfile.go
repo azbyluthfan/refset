@@ -129,7 +129,7 @@ func (f *SnapshotFile[K, V]) Save(s Snapshot[K, V]) error {
 	}
 	// Make the rename itself durable. Not every platform can sync a
 	// directory; the file's contents are already on disk.
-	if d, err := os.Open(dir); err == nil {
+	if d, err := os.Open(dir); err == nil { //nolint:gosec // the directory of the application's configured snapshot path
 		_ = d.Sync()
 		_ = d.Close()
 	}
@@ -187,12 +187,22 @@ func (f *SnapshotFile[K, V]) loadCached(_ context.Context, add func(K, V)) (uint
 	}
 	wantCRC := binary.BigEndian.Uint64(prefix[len(snapshotMagic):])
 	size := binary.BigEndian.Uint64(prefix[len(snapshotMagic)+8:])
+	// The length comes from the file: bound it by the file's real size
+	// before using it, so a damaged or crafted header can't overflow int64.
+	info, err := file.Stat()
+	if err != nil {
+		return 0, err
+	}
+	if size > uint64(info.Size()-int64(snapshotPrefixLen)) { //nolint:gosec // Size() is non-negative and at least the prefix we just read
+		return 0, fmt.Errorf("header claims %d bytes, file has %d", size, info.Size()-int64(snapshotPrefixLen))
+	}
+	bodyLen := int64(size) //nolint:gosec // bounded by the file size above
 
 	// Pass 1: the checksum over the whole body.
 	crc := crc64.New(crcTable)
-	if n, err := io.Copy(crc, io.LimitReader(file, int64(size))); err != nil {
+	if n, err := io.Copy(crc, io.LimitReader(file, bodyLen)); err != nil {
 		return 0, fmt.Errorf("reading body: %w", err)
-	} else if uint64(n) != size {
+	} else if n != bodyLen {
 		return 0, fmt.Errorf("file truncated (%d of %d bytes)", n, size)
 	}
 	if crc.Sum64() != wantCRC {
@@ -203,7 +213,7 @@ func (f *SnapshotFile[K, V]) loadCached(_ context.Context, add func(K, V)) (uint
 	if _, err := file.Seek(int64(snapshotPrefixLen), io.SeekStart); err != nil {
 		return 0, err
 	}
-	dec := gob.NewDecoder(bufio.NewReaderSize(io.LimitReader(file, int64(size)), 1<<16))
+	dec := gob.NewDecoder(bufio.NewReaderSize(io.LimitReader(file, bodyLen), 1<<16))
 	var h snapshotHeader
 	if err := dec.Decode(&h); err != nil {
 		return 0, fmt.Errorf("decoding header: %w", err)

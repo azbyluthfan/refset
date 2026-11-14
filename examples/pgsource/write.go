@@ -145,7 +145,7 @@ func Write(ctx context.Context, pool *pgxpool.Pool, fn func(*Tx) error, datasets
 			if _, err := ptx.Exec(ctx, `SELECT pg_notify($1, $2)`, Channel, fmt.Sprintf("%s:%d", ds, v)); err != nil {
 				return err
 			}
-			out[ds] = uint64(v)
+			out[ds] = uint64(v) //nolint:gosec // RETURNING version; the column is CHECK (version >= 0)
 		}
 		return nil
 	})
@@ -177,12 +177,12 @@ func Compact(ctx context.Context, pool *pgxpool.Pool, retention time.Duration) e
 func CompactThrough(ctx context.Context, pool *pgxpool.Pool, dataset string, through uint64) error {
 	return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
-			`DELETE FROM refset_changelog WHERE dataset = $1 AND version <= $2`, dataset, int64(through)); err != nil {
+			`DELETE FROM refset_changelog WHERE dataset = $1 AND version <= $2`, dataset, int64(through)); err != nil { //nolint:gosec // a version the caller read from the bigint column
 			return err
 		}
 		_, err := tx.Exec(ctx,
 			`UPDATE refset_versions SET compacted_through = greatest(compacted_through, $2) WHERE dataset = $1`,
-			dataset, int64(through))
+			dataset, int64(through)) //nolint:gosec // a version the caller read from the bigint column
 		return err
 	})
 }

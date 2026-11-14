@@ -68,7 +68,7 @@ type line[K comparable, V any] struct {
 
 // Open returns the store in dir, creating an empty one if needed.
 func Open[K comparable, V any](name, dir string) (*Store[K, V], error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, err
 	}
 	s := &Store[K, V]{name: name, dir: dir}
@@ -101,7 +101,7 @@ func (s *Store[K, V]) Apply(ops ...refset.Op[K, V]) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	f, err := os.OpenFile(s.path(changesFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(s.path(changesFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return 0, err
 	}
@@ -264,7 +264,7 @@ func writeAtomic(path string, v any) error {
 		return err
 	}
 	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
+	f, err := os.Create(tmp) //nolint:gosec // a temporary file in the store's own directory
 	if err != nil {
 		return err
 	}

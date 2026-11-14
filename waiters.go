@@ -50,7 +50,8 @@ func (h *waiterHeap) releaseApplied(applied uint64) {
 
 // releaseAhead fails every waiter that a completed poll proves is asking for a
 // version beyond head.
-func (h *waiterHeap) releaseAhead(seq, head uint64) {
+// releaseAhead returns how many waiters it released with ErrVersionAhead.
+func (h *waiterHeap) releaseAhead(seq, head uint64) int {
 	var ahead []*waiter
 	for _, w := range *h {
 		if w.needSeq != 0 && w.needSeq <= seq && w.min > head {
@@ -61,6 +62,7 @@ func (h *waiterHeap) releaseAhead(seq, head uint64) {
 		heap.Remove(h, w.index)
 		w.ch <- ErrVersionAhead
 	}
+	return len(ahead)
 }
 
 // remove takes w out of the heap. It reports false if w was already released.

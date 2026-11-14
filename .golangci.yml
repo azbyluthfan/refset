@@ -14,6 +14,15 @@ linters:
     - unparam
     - copyloopvar
     - nolintlint
+    - gosec       # security checks on shipped code (tests and benchmark tools excluded below)
+  exclusions:
+    rules:
+      # Tests and the benchmark tools use weak randomness, fixed paths and
+      # unchecked errors on purpose; gosec reviews the code that ships.
+      - path: _test\.go
+        linters: [gosec]
+      - path: (^|/)perfreport/
+        linters: [gosec]
   settings:
     misspell:
       locale: US

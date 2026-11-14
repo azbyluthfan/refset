@@ -202,7 +202,7 @@ func (h *Handler) SetVersions(w http.ResponseWriter, versions map[string]uint64)
 	w.Header().Set(h.versionHeader, h.Format(merged))
 	if h.cookiePrefix != "" {
 		for ds := range versions {
-			http.SetCookie(w, &http.Cookie{
+			http.SetCookie(w, &http.Cookie{ //nolint:gosec // HttpOnly and SameSite=Lax always; Secure unless Config.CookieInsecure (local development)
 				Name:     h.cookiePrefix + ds,
 				Value:    h.formatValue(ds, merged[ds]),
 				Path:     "/",

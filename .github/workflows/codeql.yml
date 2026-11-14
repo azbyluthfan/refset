@@ -1,0 +1,51 @@
+# CodeQL code scanning for the library, examples and bench modules: on every
+# push to main and pull request, and weekly so new queries reach unchanged
+# code. Findings appear in the repository's Security tab.
+# Actions are pinned by commit SHA; Dependabot updates them.
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 20 * * 0" # Sundays 20:00 UTC, after the weekly run starts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (Go)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write # upload results
+      actions: read
+    env:
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.x"
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: go
+          build-mode: manual
+          queries: security-extended
+      - name: Build every module
+        run: |
+          go build ./...
+          (cd examples && go build ./...)
+          (cd bench && go build ./...)
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: /language:go

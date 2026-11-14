@@ -62,7 +62,7 @@ type queryRower interface {
 func readVersion(ctx context.Context, q queryRower) (uint64, error) {
 	var v int64
 	err := q.QueryRow(ctx, `SELECT version FROM app_versions WHERE name = 'currencies'`).Scan(&v)
-	return uint64(v), err
+	return uint64(v), err //nolint:gosec // the app's version counter, never negative
 }
 
 // setRate is the writer: change the row and bump the version in one
@@ -76,7 +76,7 @@ func setRate(ctx context.Context, pool *pgxpool.Pool, code string, rate float64)
 		return tx.QueryRow(ctx,
 			`UPDATE app_versions SET version = version + 1 WHERE name = 'currencies' RETURNING version`).Scan(&v)
 	})
-	return uint64(v), err
+	return uint64(v), err //nolint:gosec // the app's version counter, never negative
 }
 
 func main() {
@@ -89,7 +89,7 @@ func run() error {
 	ctx := context.Background()
 	url := os.Getenv("REFSET_PG_URL")
 	if url == "" {
-		url = "postgres://refset:refset@localhost:55432/refset?sslmode=disable"
+		url = "postgres://refset:refset@localhost:55432/refset?sslmode=disable" //nolint:gosec // the local Docker database from examples/docker-compose.yml
 	}
 	pool, err := pgxpool.New(ctx, url)
 	if err != nil {

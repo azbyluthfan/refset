@@ -39,7 +39,8 @@ type Dataset[K comparable, V any] struct {
 	loader   KeyLoader[K, V] // nil if src doesn't implement KeyLoader
 	name     string
 	log      *slog.Logger
-	kick     chan struct{}
+	kick     chan struct{} // a read waits for a version the source has announced
+	kickNew  chan struct{} // a read waits for a version beyond any announced
 	flights  *flights[K, V]
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -61,7 +62,9 @@ type Dataset[K comparable, V any] struct {
 	shardsKept    atomic.Uint64
 	reconciles    atomic.Uint64
 	divergences   atomic.Uint64
-	fromFile      atomic.Bool // started from a snapshot file and not yet caught up
+	fromFile      atomic.Bool  // started from a snapshot file and not yet caught up
+	lastAhead     atomic.Int64 // monotonic time a poll last answered ErrVersionAhead; 0 never
+	panics        atomic.Uint64
 	_             cacheLinePad
 
 	// Written by waiting reads and the loop under mu.
@@ -98,6 +101,7 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 		base:     newLayout(1),
 		eq:       equalFor(caps),
 		kick:     make(chan struct{}, 1),
+		kickNew:  make(chan struct{}, 1),
 		flights:  newFlights[K, V](cfg.maxFallbacks),
 		loopDone: make(chan struct{}),
 	}
@@ -106,11 +110,9 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 		d.loader = kl
 	}
 	start := cfg.clock.Now()
-	r, fromFile := d.loadFromFile(ctx)
-	if r == nil {
-		if r, _, err = d.load(ctx, nil); err != nil {
-			return nil, fmt.Errorf("refset: open dataset %q: %w", d.name, err)
-		}
+	r, fromFile, err := d.openLoad(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("refset: open dataset %q: %w", d.name, err)
 	}
 	d.root.Store(r)
 	d.knownHead.Store(r.version)
@@ -125,8 +127,8 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 	}
 	d.lastApply.Store(start.WallNanos)
 
-	d.ctx, d.cancel = context.WithCancel(context.Background())
-	watch, err := src.Watch(d.ctx)
+	d.ctx, d.cancel = context.WithCancel(context.Background()) //nolint:gosec // cancel is kept in d.cancel and called by Close
+	watch, err := d.watch()
 	if err != nil {
 		d.log.Warn("refset: watch unavailable; relying on polling", "err", err)
 		watch = nil
@@ -136,6 +138,33 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 		d.kick <- struct{}{} // catch up with the source at once
 	}
 	return d, nil
+}
+
+// openLoad is Open's first load, from the snapshot file or the source, with a
+// panic in either returned as a *PanicError.
+func (d *Dataset[K, V]) openLoad(ctx context.Context) (r *root[K, V], fromFile bool, err error) {
+	defer func() {
+		if p := recovered(recover()); p != nil {
+			d.panics.Add(1)
+			r, fromFile, err = nil, false, p
+		}
+	}()
+	if r, fromFile = d.loadFromFile(ctx); r != nil {
+		return r, fromFile, nil
+	}
+	r, _, err = d.load(ctx, nil)
+	return r, false, err
+}
+
+// watch calls Source.Watch, with a panic returned as a *PanicError.
+func (d *Dataset[K, V]) watch() (ch <-chan uint64, err error) {
+	defer func() {
+		if p := recovered(recover()); p != nil {
+			d.panics.Add(1)
+			ch, err = nil, p
+		}
+	}()
+	return d.src.Watch(d.ctx)
 }
 
 // loadFromFile loads the snapshot file if the source has one and it is
@@ -264,16 +293,25 @@ func (d *Dataset[K, V]) GetFresh(key K) (V, bool, error) {
 
 // Close stops the background loop and fails any waiting reads with ErrClosed.
 // Get and Snapshot keep serving the last version.
+//
+// Close waits for the loop to finish its current call to the source. If the
+// source ignores context cancellation and is still busy after 10 seconds,
+// Close returns an error saying so and leaves that call running.
 func (d *Dataset[K, V]) Close() error {
+	var err error
 	d.close.Do(func() {
 		d.cancel()
-		<-d.loopDone
+		select {
+		case <-d.loopDone:
+		case <-time.After(closeWait):
+			err = fmt.Errorf("refset: close dataset %q: the source did not return within %v of cancellation; it should honor its context", d.name, closeWait)
+		}
 		d.mu.Lock()
 		d.closed = true
 		d.waiters.releaseAll(ErrClosed)
 		d.mu.Unlock()
 	})
-	return nil
+	return err
 }
 
 // register adds a waiter for minVersion. It returns nil, nil if the version was
@@ -289,7 +327,8 @@ func (d *Dataset[K, V]) register(minVersion uint64) (*waiter, error) {
 		return nil, nil
 	}
 	w := &waiter{min: minVersion, ch: make(chan error, 1)}
-	if minVersion > d.knownHead.Load() {
+	unknown := minVersion > d.knownHead.Load()
+	if unknown {
 		// Unknown version: ErrVersionAhead needs a poll that starts after
 		// this request (design §4.5).
 		w.needSeq = d.pollsStarted + 1
@@ -297,10 +336,16 @@ func (d *Dataset[K, V]) register(minVersion uint64) (*waiter, error) {
 	heap.Push(&d.waiters, w)
 	d.mu.Unlock()
 
-	// Ask for a poll now even if a notification already announced the
-	// version, rather than wait for a batched poll.
+	// Ask for a poll now, even if a notification already announced the
+	// version, rather than wait for a batched poll. A version beyond any
+	// announced, which is what a forged version always is, goes through the
+	// rate-limited kick instead (see loop).
+	kick := d.kick
+	if unknown {
+		kick = d.kickNew
+	}
 	select {
-	case d.kick <- struct{}{}:
+	case kick <- struct{}{}:
 	default: // a poll is already queued; it serves this request too
 	}
 	return w, nil
@@ -401,6 +446,29 @@ func (d *Dataset[K, V]) loop(watch <-chan uint64) {
 			}
 			stopBatch() // this poll covers any batched one
 			refresh(false)
+		case <-d.kickNew:
+			// A read for a version beyond any the source has announced polls
+			// at once, unless a recent poll found such a version doesn't exist
+			// (ErrVersionAhead): someone is sending forged versions, so these
+			// polls run at most once per BatchWindow until that stops.
+			// Coalescing already bounds a flood to one poll at a time; this
+			// also bounds the rate, so forged versions can't make every replica
+			// poll its source as fast as it answers. Legitimate versions are
+			// found, so without forgeries nothing is delayed.
+			if failed && time.Duration(clock.Now().MonoNanos-lastStart) < kickBackoff {
+				continue
+			}
+			now := clock.Now().MonoNanos
+			since := time.Duration(now - lastStart)
+			ahead := d.lastAhead.Load()
+			underAttack := ahead != 0 && time.Duration(now-ahead) < forgeryCooldown
+			if !underAttack || !refreshed || since >= d.cfg.batchWindow {
+				stopBatch()
+				refresh(false)
+			} else if batchC == nil {
+				batch = clock.NewTimer(d.cfg.batchWindow - since)
+				batchC = batch.C()
+			}
 		case <-reloadC:
 			refresh(true)
 			reload = clock.NewTimer(d.cfg.reloadInterval)
@@ -422,7 +490,7 @@ func (d *Dataset[K, V]) refresh(full bool) bool {
 	start := d.cfg.clock.Now()
 	d.polls.Add(1)
 	cur := d.root.Load()
-	next, head, reloaded, err := d.fetch(cur, full)
+	next, head, reloaded, err := d.safeFetch(cur, full)
 	if err != nil {
 		if d.ctx.Err() == nil {
 			d.pollErrors.Add(1)
@@ -444,6 +512,21 @@ func (d *Dataset[K, V]) refresh(full bool) bool {
 	d.fromFile.Store(false)
 	d.finish(seq, head, true)
 	return true
+}
+
+// safeFetch is fetch with a panic in source code (Changes, LoadSnapshot,
+// Equal, a ReloadSource's functions) recovered and returned as a
+// *PanicError: the poll fails and the dataset keeps its last version.
+func (d *Dataset[K, V]) safeFetch(cur *root[K, V], full bool) (next *root[K, V], head uint64, reloaded bool, err error) {
+	defer func() {
+		if p := recovered(recover()); p != nil {
+			d.panics.Add(1)
+			d.log.Error("refset: panic in source code; the poll failed and the dataset keeps its last version",
+				"panic", p.Value, "stack", string(p.Stack))
+			next, head, reloaded, err = nil, 0, false, p
+		}
+	}()
+	return d.fetch(cur, full)
 }
 
 func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], head uint64, reloaded bool, err error) {
@@ -482,7 +565,7 @@ func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], hea
 	if full && d.cfg.reconcile {
 		if n, ok := d.reconcile(cur, next); ok {
 			d.reconciles.Add(1)
-			d.divergences.Add(uint64(n))
+			d.divergences.Add(uint64(n)) //nolint:gosec // a count, never negative
 			if n > 0 {
 				d.log.Warn("refset: reconcile found entries that differ from the source without a reported change; the source's change feed missed them",
 					"count", n, "applied", cur.version, "reloaded", next.version)
@@ -497,9 +580,9 @@ func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], hea
 }
 
 func (d *Dataset[K, V]) recordCopies(st copyStats) {
-	d.shardsCopied.Add(uint64(st.shardsCopied))
-	d.entriesCopied.Add(uint64(st.entriesCopied))
-	d.shardsKept.Add(uint64(st.shardsKept))
+	d.shardsCopied.Add(uint64(st.shardsCopied))   //nolint:gosec // a count, never negative
+	d.entriesCopied.Add(uint64(st.entriesCopied)) //nolint:gosec // a count, never negative
+	d.shardsKept.Add(uint64(st.shardsKept))       //nolint:gosec // a count, never negative
 }
 
 // finish records a completed poll and releases waiters it satisfies.
@@ -508,8 +591,8 @@ func (d *Dataset[K, V]) finish(seq, head uint64, ok bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.waiters.releaseApplied(applied)
-	if ok {
-		d.waiters.releaseAhead(seq, head)
+	if ok && d.waiters.releaseAhead(seq, head) > 0 {
+		d.lastAhead.Store(d.cfg.clock.Now().MonoNanos)
 	}
 }
 
