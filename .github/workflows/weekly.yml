@@ -129,21 +129,25 @@ jobs:
       matrix:
         include:
           - arch: s390x # big-endian
-            qemu: qemu-s390x
+            platform: s390x
           - arch: arm # 32-bit ARM
-            qemu: qemu-arm
+            platform: arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.x"
-      - name: Install QEMU user-mode emulation
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq qemu-user
+      # Registers QEMU with the kernel (binfmt), so foreign binaries run
+      # transparently, including test binaries a test starts as subprocesses
+      # (go test -exec would wrap only the top-level binary).
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: ${{ matrix.platform }}
       - name: Tests under QEMU (slow; no race detector)
         env:
           GOARCH: ${{ matrix.arch }}
           GOARM: "7"
-        run: go test -exec ${{ matrix.qemu }} ./...
+        run: go test -timeout 30m ./...
 
   wasm:
     name: WebAssembly (wasip1)
