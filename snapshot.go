@@ -14,18 +14,18 @@ type layout struct {
 }
 
 func newLayout(shards int) layout {
-	return layout{seed: maphash.MakeSeed(), mask: uint64(shards - 1)}
+	return layout{seed: maphash.MakeSeed(), mask: uint64(shards - 1)} //nolint:gosec // shards is validated: a power of two from 1 to maxShards
 }
 
 // withShards returns the same seed with a different shard count.
 func (l layout) withShards(shards int) layout {
-	return layout{seed: l.seed, mask: uint64(shards - 1)}
+	return layout{seed: l.seed, mask: uint64(shards - 1)} //nolint:gosec // shards is validated: a power of two from 1 to maxShards
 }
 
-func (l layout) shards() int { return int(l.mask) + 1 }
+func (l layout) shards() int { return int(l.mask) + 1 } //nolint:gosec // mask is below maxShards (65,536)
 
 func shardOf[K comparable](l layout, key K) int {
-	return int(maphash.Comparable(l.seed, key) & l.mask)
+	return int(maphash.Comparable(l.seed, key) & l.mask) //nolint:gosec // masked to below maxShards (65,536)
 }
 
 // Automatic shard count bounds. Below minAutoShards, the per-shard copy is

@@ -127,7 +127,7 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 	}
 	d.lastApply.Store(start.WallNanos)
 
-	d.ctx, d.cancel = context.WithCancel(context.Background())
+	d.ctx, d.cancel = context.WithCancel(context.Background()) //nolint:gosec // cancel is kept in d.cancel and called by Close
 	watch, err := d.watch()
 	if err != nil {
 		d.log.Warn("refset: watch unavailable; relying on polling", "err", err)
@@ -565,7 +565,7 @@ func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], hea
 	if full && d.cfg.reconcile {
 		if n, ok := d.reconcile(cur, next); ok {
 			d.reconciles.Add(1)
-			d.divergences.Add(uint64(n))
+			d.divergences.Add(uint64(n)) //nolint:gosec // a count, never negative
 			if n > 0 {
 				d.log.Warn("refset: reconcile found entries that differ from the source without a reported change; the source's change feed missed them",
 					"count", n, "applied", cur.version, "reloaded", next.version)
@@ -580,9 +580,9 @@ func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], hea
 }
 
 func (d *Dataset[K, V]) recordCopies(st copyStats) {
-	d.shardsCopied.Add(uint64(st.shardsCopied))
-	d.entriesCopied.Add(uint64(st.entriesCopied))
-	d.shardsKept.Add(uint64(st.shardsKept))
+	d.shardsCopied.Add(uint64(st.shardsCopied))   //nolint:gosec // a count, never negative
+	d.entriesCopied.Add(uint64(st.entriesCopied)) //nolint:gosec // a count, never negative
+	d.shardsKept.Add(uint64(st.shardsKept))       //nolint:gosec // a count, never negative
 }
 
 // finish records a completed poll and releases waiters it satisfies.

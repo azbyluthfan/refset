@@ -208,7 +208,7 @@ func (s *Source[K, V]) catchUpPossible(ctx context.Context, after uint64) (bool,
 			        WHERE dataset = $1 AND version > $2 AND version <= $3 AND reload),
 			(SELECT count(*) FROM (SELECT DISTINCT key FROM refset_changelog
 			        WHERE dataset = $1 AND version > $2 AND version <= $3 AND NOT reload LIMIT $4) AS k)`,
-		s.t.Dataset, int64(after), int64(head), s.t.BacklogLimit+1).Scan(&reload, &keys)
+		s.t.Dataset, int64(after), int64(head), s.t.BacklogLimit+1).Scan(&reload, &keys) //nolint:gosec // versions come from bigint columns and never exceed the head read from them
 	if err != nil {
 		return false, err
 	}
@@ -248,7 +248,7 @@ func (s *Source[K, V]) Changes(ctx context.Context, after uint64) (uint64, []ref
 	rows, err := tx.Query(ctx, `
 		SELECT DISTINCT key, reload FROM refset_changelog
 		WHERE dataset = $1 AND version > $2 AND version <= $3`,
-		s.t.Dataset, int64(after), int64(head))
+		s.t.Dataset, int64(after), int64(head)) //nolint:gosec // versions come from bigint columns and never exceed the head read from them
 	if err != nil {
 		return 0, nil, err
 	}
