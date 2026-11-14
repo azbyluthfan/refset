@@ -168,7 +168,7 @@ No readers; each cell runs 5 s. GC CPU is the runtime's estimate (`runtime/metri
 
 The locked map updated in place allocates nothing at any write rate, so it has no GC cost (rows omitted), and with no writes neither store allocates.
 
-- **Each change costs a copy of the shards it touches.** With the default 256 shards, a one-key change at 1M entries copies a ~4k-entry shard (~370 KB of garbage). At 1,000 changes/s that is 370 MB/s and 11% of a core in GC; at 100k entries, 21 MB/s and 1.8%. Pauses stay under 0.2 ms.
+- **Each change costs a copy of the shards it touches.** With 256 shards (the fixed default before v0.2.0), a one-key change at 1M entries copies a ~4k-entry shard (~370 KB of garbage). At 1,000 changes/s that is 370 MB/s and 11% of a core in GC; at 100k entries, 21 MB/s and 1.8%. Pauses stay under 0.2 ms.
 - **A full reload allocates 1.7× more than building one map** (190 vs 113 MB per reload at 1M): refset grows 256 shard maps from empty, while the rebuilt map is created at its final size.
 
 Holding a dataset also costs the GC when the application allocates: every cycle the application's garbage triggers marks the whole live heap, the dataset included. Here the application allocates 100 MB/s and the dataset receives no writes:

@@ -197,18 +197,19 @@ It does not fit carts, stock counts, seat holds, reservations or sessions: data 
 
 ## Operating refset
 
-- The dataset lives in memory: a restarted process reloads it in `Open` and reports ready only after that. Roll restarts gradually. To restart from local disk instead, wrap the source in `refset.SnapshotFile` and `Save` on shutdown ([restart example](examples/restart/main.go)).
-- A reload holds two copies of the dataset while it swaps.
-- Values are shared between readers: treat them as read-only.
-- Keep a real `PollInterval`; set `MaxStaleness` to at least 2× it for fail-closed reads.
-- Keep values small or store pointers to large ones. The shard count follows the dataset's size; see [performance](docs/performance.md).
-- Every change to the source must be recorded in its change feed. Changes it never reports go unnoticed until the next reload (`Options.ReloadInterval` bounds that).
+- **Startup.** The dataset lives in memory: `Open` loads it and returns once it is complete, so report ready only after that, and roll restarts gradually. To restart from local disk instead, wrap the source in `refset.SnapshotFile` and `Save` on shutdown and periodically ([restart example](examples/restart/main.go)); `GetFresh` refuses until the replica has caught up.
+- **Memory.** About the size of a plain Go map with the same contents. A reload that changes little needs little extra when values can be compared (`==`, or `ReloadSource.Equal`); otherwise it holds two copies while it swaps. In a container, set `GOMEMLIMIT` to about 90% of its limit and size the container at 2× the process's steady Go memory or more ([performance](docs/performance.md)).
+- **Freshness.** Keep a real `PollInterval`; set `MaxStaleness` to at least 2× it, and read with `GetFresh` where acting on old data would be wrong.
+- **Changes the source never reports** (an unlogged write, a manual edit, a version not bumped) leave replicas diverged until the next reload. `Options.ReloadInterval` bounds how long; `Options.Reconcile` detects them and counts them in `Stats().Divergences`. Alert on it.
+- **Monitoring.** `Stats()` reports versions, lag, staleness, poll errors, recovered panics, divergences and copy-on-write work; `refsetexpvar.Publish` serves them at `/debug/vars`.
+- **Values are shared by every reader:** treat them as read-only, and use `refsettest.DetectValueMutation` in tests to catch code that changes them. Keep values small, or store pointers to large ones.
+- **Untrusted clients.** Set `refsethttp.Config.SigningKey` on endpoints they can reach, so forged versions are ignored ([security model](docs/security.md)).
 
-Details: [guarantees](docs/guarantees.md) · [performance and memory](docs/performance.md) · [benchmarks](docs/benchmarks.md).
+Details: [guarantees](docs/guarantees.md) · [performance and memory](docs/performance.md) · [benchmarks](docs/benchmarks.md) · [security](docs/security.md).
 
 ## Status
 
-Experimental. The latest release is v0.2.0; the API may change before v1.0. See the [CHANGELOG](CHANGELOG.md) and the [roadmap](docs/roadmap.md).
+Experimental. The latest release is v0.3.0; the API may change before v1.0. See the [CHANGELOG](CHANGELOG.md) and the [roadmap](docs/roadmap.md).
 
 ## Documentation
 
@@ -217,7 +218,7 @@ Experimental. The latest release is v0.2.0; the API may change before v1.0. See 
 - [Source contract](docs/source-contract.md): what a `Source` must guarantee
 - [Performance and memory](docs/performance.md) and [benchmarks](docs/benchmarks.md)
 - [Security model](docs/security.md): trust boundaries, threats and how they're handled
-- [Roadmap](docs/roadmap.md): what comes after v0.1.0
+- [Roadmap](docs/roadmap.md): what has shipped and what comes next
 
 ## Contributing
 

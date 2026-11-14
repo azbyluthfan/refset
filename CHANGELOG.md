@@ -4,18 +4,27 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-14
+
+Correctness, operations and security release: a reconcile check that catches changes a source's feed missed, a snapshot file for fast restarts, recovery from panics in source code, limits that keep a slow or flooded source from piling up work, and CI on Linux ARM64, Windows, macOS, 32-bit, s390x and WebAssembly. Reads are unchanged. No API was removed.
+
+### Upgrading
+
+- **`MaxConcurrentFallbacks` now defaults to 32.** If your reads depend on many fallback calls running at once, set it higher, or `-1` for the old unlimited behaviour. Reads beyond the limit get `ErrNotCaughtUp`.
+- **`GetCtx` is deprecated:** rename calls to `GetForRequest`. `GetCtx` is removed in v0.4.0.
+- **Forged versions are rate-limited.** Nothing to change; replicas whose clients send versions the source hasn't reached poll less often.
+- `examples/pgsource` users: reinstall triggers so their names include the dataset (see Fixed).
+
 ### Added
 
 - CI tests every change on Linux ARM64, Windows and macOS as well as Linux x86-64, as 32-bit x86, and with one or two CPUs; the weekly run adds s390x (big-endian) and 32-bit ARM under QEMU, WebAssembly (`wasip1`) under wasmtime, and perfreport on x86-64 and ARM64 runners. Supported platforms are listed in the README.
 - **`refsetexpvar`**: `Publish(d)` adds a dataset's `Stats` to an `expvar` map named `refset`, served at `/debug/vars`. A separate package, because importing `expvar` registers that handler on `http.DefaultServeMux`; still standard library only.
 - **`Dataset.GetForRequest`**: the new name of `GetCtx` (below).
 - Runnable examples for `SnapshotFile`, `Options.Reconcile`, `refsettest.DetectValueMutation` and `refsetexpvar.Publish` on pkg.go.dev.
-
 - **`PanicError`** and **`Stats().Panics`**: panics in source code (a `Source`, `KeyLoader`, or `ReloadSource`'s functions) are recovered. On the background loop the poll fails and the dataset keeps its last version; during `Open` the panic is returned as an error.
 - **`refsettest.DetectValueMutation`**: fails a test when code under test changes a value it read from a dataset (values are shared by every reader).
 - **docs/security.md**: the security model: trust boundaries, threats and how each is handled.
 - CI: gosec in golangci-lint for shipped code, and CodeQL's security-extended queries on pushes, pull requests and weekly. New fuzz targets for refreshes with arbitrary source answers, diffed reloads and snapshot file decoding.
-
 - **`Options.Reconcile`**: compares each periodic reload (`ReloadInterval`) with the version it replaces and counts entries that differ although the source reported no change to them, in the new `Stats().Divergences` (and `Stats().Reconciles`), with a warning in the log. It detects changes a source's feed missed: unlogged writes, manual edits, or a `ReloadSource` change made without bumping the version.
 - **`refset.SnapshotFile`**: wraps a source with a copy of the dataset on local disk. `Open` starts from the file and catches up through `Changes`; `GetFresh` fails closed until it has. The file is checked (checksum, dataset name, key and value types, optional `MaxAge`) and ignored if anything doesn't match. `Save` writes atomically with mode 0600 and refuses types gob would encode lossily. New `restart` example.
 - `examples/pgsource`: `InstallDeferredTriggers` and `InstallDeferredReloadTrigger`, a trigger mode that assigns versions at commit in sorted dataset order, so trigger-mode writers can't deadlock on version rows (immediate mode aborted 194 of 200 transactions in a 20-writer stress test; deferred mode none). Writers read their version with `CurrentVersions` after the commit. Needs PostgreSQL 13+.
