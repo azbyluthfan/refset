@@ -235,7 +235,7 @@ func TestSnapshotFileRefusesFieldsGobWouldDrop(t *testing.T) {
 }
 
 func TestSnapshotFileIsPrivate(t *testing.T) {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" || runtime.GOOS == "wasip1" || runtime.GOOS == "js" {
 		t.Skip("Unix permissions")
 	}
 	path := filepath.Join(t.TempDir(), "plans.snap")

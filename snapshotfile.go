@@ -109,10 +109,8 @@ func (f *SnapshotFile[K, V]) Save(s Snapshot[K, V]) error {
 		return fmt.Errorf("refset: SnapshotFile save: %w", err)
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }() // no-op after the rename
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("refset: SnapshotFile save: %w", err)
-	}
+	// os.CreateTemp creates the file with mode 0600, so it is private from
+	// the start (and no chmod is needed, which WASI lacks).
 	if err := f.write(tmp, s); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("refset: SnapshotFile save: %w", err)

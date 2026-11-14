@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -76,6 +77,9 @@ func TestBrokenSourceChild(t *testing.T) {
 }
 
 func TestConformanceCatchesBrokenSources(t *testing.T) {
+	if runtime.GOOS == "wasip1" || runtime.GOOS == "js" {
+		t.Skip("runs each broken source in a child process; WebAssembly can't start processes")
+	}
 	for name, b := range brokenSources {
 		t.Run(name, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestBrokenSourceChild$", "-test.count=1")

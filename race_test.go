@@ -16,6 +16,9 @@ import (
 // G2: each version moves value between two keys, keeping their sum constant.
 // 64 readers taking snapshots must always see the constant sum, under -race.
 func TestConcurrentReadersSeeAtomicBatches(t *testing.T) {
+	if runtime.GOARCH == "wasm" {
+		t.Skip("needs goroutines running in parallel; WebAssembly runs Go on one thread without preemption")
+	}
 	const total = 1000
 	src := newSrc()
 	src.Apply(
