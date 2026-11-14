@@ -27,6 +27,10 @@ func recovered(r any) *PanicError {
 	return &PanicError{Value: r, Stack: debug.Stack()}
 }
 
+// forgeryCooldown is how long after a poll answers ErrVersionAhead that polls
+// for unannounced versions stay rate-limited.
+const forgeryCooldown = time.Second
+
 // closeWait bounds how long Close waits for the background loop, which is
 // blocked only if the source ignores context cancellation.
 var closeWait = 10 * time.Second

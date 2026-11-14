@@ -39,7 +39,8 @@ type Dataset[K comparable, V any] struct {
 	loader   KeyLoader[K, V] // nil if src doesn't implement KeyLoader
 	name     string
 	log      *slog.Logger
-	kick     chan struct{}
+	kick     chan struct{} // a read waits for a version the source has announced
+	kickNew  chan struct{} // a read waits for a version beyond any announced
 	flights  *flights[K, V]
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -61,7 +62,8 @@ type Dataset[K comparable, V any] struct {
 	shardsKept    atomic.Uint64
 	reconciles    atomic.Uint64
 	divergences   atomic.Uint64
-	fromFile      atomic.Bool // started from a snapshot file and not yet caught up
+	fromFile      atomic.Bool  // started from a snapshot file and not yet caught up
+	lastAhead     atomic.Int64 // monotonic time a poll last answered ErrVersionAhead; 0 never
 	panics        atomic.Uint64
 	_             cacheLinePad
 
@@ -99,6 +101,7 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 		base:     newLayout(1),
 		eq:       equalFor(caps),
 		kick:     make(chan struct{}, 1),
+		kickNew:  make(chan struct{}, 1),
 		flights:  newFlights[K, V](cfg.maxFallbacks),
 		loopDone: make(chan struct{}),
 	}
@@ -324,7 +327,8 @@ func (d *Dataset[K, V]) register(minVersion uint64) (*waiter, error) {
 		return nil, nil
 	}
 	w := &waiter{min: minVersion, ch: make(chan error, 1)}
-	if minVersion > d.knownHead.Load() {
+	unknown := minVersion > d.knownHead.Load()
+	if unknown {
 		// Unknown version: ErrVersionAhead needs a poll that starts after
 		// this request (design §4.5).
 		w.needSeq = d.pollsStarted + 1
@@ -332,10 +336,16 @@ func (d *Dataset[K, V]) register(minVersion uint64) (*waiter, error) {
 	heap.Push(&d.waiters, w)
 	d.mu.Unlock()
 
-	// Ask for a poll now even if a notification already announced the
-	// version, rather than wait for a batched poll.
+	// Ask for a poll now, even if a notification already announced the
+	// version, rather than wait for a batched poll. A version beyond any
+	// announced, which is what a forged version always is, goes through the
+	// rate-limited kick instead (see loop).
+	kick := d.kick
+	if unknown {
+		kick = d.kickNew
+	}
 	select {
-	case d.kick <- struct{}{}:
+	case kick <- struct{}{}:
 	default: // a poll is already queued; it serves this request too
 	}
 	return w, nil
@@ -436,6 +446,29 @@ func (d *Dataset[K, V]) loop(watch <-chan uint64) {
 			}
 			stopBatch() // this poll covers any batched one
 			refresh(false)
+		case <-d.kickNew:
+			// A read for a version beyond any the source has announced polls
+			// at once, unless a recent poll found such a version doesn't exist
+			// (ErrVersionAhead): someone is sending forged versions, so these
+			// polls run at most once per BatchWindow until that stops.
+			// Coalescing already bounds a flood to one poll at a time; this
+			// also bounds the rate, so forged versions can't make every replica
+			// poll its source as fast as it answers. Legitimate versions are
+			// found, so without forgeries nothing is delayed.
+			if failed && time.Duration(clock.Now().MonoNanos-lastStart) < kickBackoff {
+				continue
+			}
+			now := clock.Now().MonoNanos
+			since := time.Duration(now - lastStart)
+			ahead := d.lastAhead.Load()
+			underAttack := ahead != 0 && time.Duration(now-ahead) < forgeryCooldown
+			if !underAttack || !refreshed || since >= d.cfg.batchWindow {
+				stopBatch()
+				refresh(false)
+			} else if batchC == nil {
+				batch = clock.NewTimer(d.cfg.batchWindow - since)
+				batchC = batch.C()
+			}
 		case <-reloadC:
 			refresh(true)
 			reload = clock.NewTimer(d.cfg.reloadInterval)
@@ -558,8 +591,8 @@ func (d *Dataset[K, V]) finish(seq, head uint64, ok bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.waiters.releaseApplied(applied)
-	if ok {
-		d.waiters.releaseAhead(seq, head)
+	if ok && d.waiters.releaseAhead(seq, head) > 0 {
+		d.lastAhead.Store(d.cfg.clock.Now().MonoNanos)
 	}
 }
 
