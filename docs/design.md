@@ -25,7 +25,7 @@ Reads are always local and lock-free. The network is used only in the background
 - **Not a general cache:** no eviction, no cache-on-miss. The whole dataset must fit in memory.
 - **Not for frequently written data.** Reference data is read on most requests, changed by humans or admin tools, and gives the same answer for every user. Carts, stock counts, seat holds and reservations don't fit: they are written constantly, are often per-user, and need an atomic compare-and-set at the source that no replica can give (see §4.9).
 - **No transactions across datasets:** each dataset has its own version sequence, and replicas apply datasets independently.
-- **No persistence:** a restarted process reloads from its source (§4.4).
+- **No persistence by default:** a restarted process reloads from its source (§4.4), unless the source is wrapped in an opt-in `SnapshotFile`, which starts from a copy on local disk and catches up.
 - **No infrastructure in the library:** the core is source-agnostic. Postgres is provided as an example source only (§6.3).
 
 ## 2. Core Concepts
@@ -125,7 +125,7 @@ The dataset lives only in process memory, so every process start (first deploy, 
   - Startup time grows with dataset size (published in `docs/benchmarks.md`).
   - Report ready (e.g. a Kubernetes readiness probe) only after `Open` returns.
   - Restarting many replicas at once means many full loads hitting the source together; roll restarts gradually.
-- Starting from a snapshot saved on local disk is a post-v0.1 option. If added, staleness counts from process start, so `GetFresh` fails closed until the first successful catch-up.
+- Starting from a snapshot saved on local disk: `SnapshotFile` (opt-in) wraps a source. `Open` loads the file into a separate version, falling back to the source if the checksum, dataset name, key and value type fingerprint or `MaxAge` doesn't match, then polls `Changes(fileVersion)` at once. Its last-confirmed time starts at "never", so `GetFresh` fails closed until the first successful catch-up. If the source compacted past the file or its history is behind it, the dataset reloads. Entries are encoded with `encoding/gob`; `Save` refuses types with unexported fields, which gob would drop, and writes atomically (temporary file, fsync, rename) with mode 0600.
 
 ### 4.5 Version-aware reads
 
@@ -607,7 +607,7 @@ Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of tail l
 | Trigger mode deadlocks between uncontrolled writers | Postgres aborts one (`40P01`), no corruption; documented retry advice; deferred, sorted trigger variant post-v0.1 |
 | Fallback stampede when a replica falls behind | Per-key collapsing; optional `MaxConcurrentFallbacks` |
 | Copy-on-write cost for very large datasets | Sharding plus batching; the shard count follows the dataset's size; measured up to 10M entries |
-| Slow startup or source overload after mass restarts | Documented: readiness after `Open`, gradual rollouts; startup cost published; local snapshot file as a later option |
+| Slow startup or source overload after mass restarts | Documented: readiness after `Open`, gradual rollouts; startup cost published; opt-in `SnapshotFile` restarts from local disk |
 | Clients not echoing the version header | Read-your-writes is opt-in; session-cookie alternative; revocation uses the staleness bound, which needs no client cooperation |
 | Clock problems on a replica | Staleness uses the larger of monotonic and wall elapsed time, so every clock error fails closed (§4.6) |
 | Postgres example: serialized writes too slow for some datasets | Documented; reference data is write-light; per-dataset version rows keep datasets independent |
