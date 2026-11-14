@@ -24,7 +24,7 @@ Runnable programs showing how to feed refset from different kinds of data, and t
 | [`dbrows`](dbrows/main.go) | `ReloadSource` over the app's own SQL that scans rows into structs, plus a one-row version counter the writer bumps in the same transaction; no refset tables or adapter | Postgres | `go run ./dbrows` |
 | [`currencies`](currencies/main.go) | A currency table served from memory with `pgsource`; an admin update reaches the replica through `NOTIFY` | Postgres | `go run ./currencies` |
 | [`plan-upgrade`](plan-upgrade/main.go) | The full story over real HTTP: billing and two API replicas, with and without the version header, a slow replica falling back to the primary, and a forged version refused | Postgres | `go run ./plan-upgrade` |
-| [`pgsource`](pgsource/) | A reusable package: the reference Postgres `Source` with per-key changes, `Write`, a shared listener, compaction, and optional triggers | Postgres (for its tests) | `go test ./pgsource` |
+| [`pgsource`](pgsource/) | A reusable package: the reference Postgres `Source` with per-key changes, `Write`, a shared listener and compaction; optional triggers, immediate or deferred (assigning versions at commit, so writers can't deadlock); key-mapping triggers for datasets built from joins; full snapshots from a read replica (`Table.SnapshotPool`) | Postgres (for its tests) | `go test ./pgsource` |
 | [`filesource`](filesource/filesource.go) | A reusable package: a full `Source` over a JSON snapshot and an append-only change file, in under 300 lines | Nothing | `go test ./filesource` |
 
 Every program starts with a comment explaining what it does, and prints what happens step by step.

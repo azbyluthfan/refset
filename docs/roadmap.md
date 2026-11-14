@@ -4,25 +4,21 @@ Where refset is going after the first release. The reasoning behind the design i
 
 Nothing here is a promise of dates. Items move up when users ask for them; open an issue if one matters to you.
 
-## Where things stand (2026-11-11)
+## Where things stand (2026-11-14)
 
 | Area | State |
 |---|---|
-| Repository, CI, Source contract | Done |
-| Core library (`Dataset`, copy-on-write shards, waiters, staleness) | Done |
-| Test kit (`refsettest`, conformance suite, in-process scenarios) | Done |
-| HTTP propagation (`refsethttp`) | Done |
-| Examples (`pgsource`, `filesource`, demos) | Done |
-| Docs, benchmarks, 1-hour soak | Done |
-| `ReloadSource` and the `structs` / `dbrows` / `httpjson` examples | Done |
-| Pipelines: CI, examples, weekly (soak, fuzzing, govulncheck, newest Go and Postgres), release | Done, green on GitHub |
-| **v0.1.0** | **Released 2026-11-11** ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.1.0), [pkg.go.dev](https://pkg.go.dev/github.com/azbyluthfan/refset)) |
-| Performance P0: measure latency, GC and memory | Done ([benchmarks](benchmarks.md#latency-gc-and-memory-under-load)) |
-| Performance P1: automatic shards, adaptive batching, diffed reloads | Done, ships in v0.2.0 ([results](benchmarks.md#after-the-p1-changes)) |
-| Large datasets (10M) and nested values | Measured ([results](benchmarks.md#large-datasets-and-nested-values)) |
+| Core library, test kit, HTTP propagation, examples, docs | Done |
+| **v0.1.0** | Released 2026-11-11 ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.1.0)) |
+| **v0.2.0**: performance P0 and P1 (automatic shards, adaptive batching, diffed reloads) | Released 2026-11-11 ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.2.0)) |
 | Performance P2: storage layout | Investigated, not adopted ([results](benchmarks.md#shard-storage-experiment-p2)) |
-| **v0.2.0** | **Releasing:** P0 and P1, see the [CHANGELOG](../CHANGELOG.md) |
-| **Performance P3: exploration** | **Next** (below) |
+| Large datasets (10M) and nested values; memory limits (P3a) | Measured ([large data](benchmarks.md#large-datasets-and-nested-values), [memory limits](benchmarks.md#memory-limits)) |
+| Correctness and operations: reconcile check, `SnapshotFile`, `pgsource` deferred and key-mapping triggers, replica snapshots | Done, ships in v0.3.0 |
+| Security (P3c): panic recovery, fallback cap, forged-version rate limit, fuzzing, static analysis, threat model | Done, ships in v0.3.0 |
+| Platforms (P3b): Linux x86-64 and ARM64, Windows, macOS, 32-bit, big-endian, WebAssembly, 1–2 CPUs in CI | Done, ships in v0.3.0 |
+| `refsetexpvar`, `GetForRequest`, runnable examples | Done, ships in v0.3.0 |
+| **v0.3.0** | **Releasing** ([CHANGELOG](../CHANGELOG.md)) |
+| **Next** | The rest of P3 (real-Postgres measurement, dedicated-machine benchmarks, suspend tests), change notification, ecosystem items on demand |
 
 ## Performance track
 
@@ -86,7 +82,7 @@ The plan as written before the work:
 
 Revisit if a real workload shows reads or GC time from refset's own storage dominating, or if Go's maps change.
 
-### Phase P3: exploration (next)
+### Phase P3: exploration (in progress)
 
 Questions the docs make claims about without having tested them, or where real deployments differ from the one machine (Apple M1, macOS) used so far. Each item answers one question and changes the docs it names; none is expected to change the library unless the answer surprises. Three groups: measurement, platforms, security.
 
@@ -126,13 +122,13 @@ Questions the docs make claims about without having tested them, or where real d
 
 ## Correctness and operations track
 
-- ~~**Reconcile check**~~ **Done (unreleased):** `Options.Reconcile` compares each periodic reload with the version it replaces, skipping keys the source reported changing, and counts the rest in `Stats().Divergences` with a warning in the log.
-- ~~**Local snapshot file**~~ **Done (unreleased):** `refset.SnapshotFile` wraps a source; `Open` starts from the saved file (checksum, dataset name, type fingerprint and age checked; the source is used otherwise) and catches up through `Changes`; `GetFresh` fails closed until it has. 1M entries: `Save` 170 ms, 18 MB file, `Open` from the file 260 ms. How much faster that is than a real source's full load is part of the P3a Postgres measurement.
+- ~~**Reconcile check**~~ **Done (v0.3.0):** `Options.Reconcile` compares each periodic reload with the version it replaces, skipping keys the source reported changing, and counts the rest in `Stats().Divergences` with a warning in the log.
+- ~~**Local snapshot file**~~ **Done (v0.3.0):** `refset.SnapshotFile` wraps a source; `Open` starts from the saved file (checksum, dataset name, type fingerprint and age checked; the source is used otherwise) and catches up through `Changes`; `GetFresh` fails closed until it has. 1M entries: `Save` 170 ms, 18 MB file, `Open` from the file 260 ms. How much faster that is than a real source's full load is part of the P3a Postgres measurement.
 - **pgsource:**
-  - ~~Deferred, sorted trigger variant~~ **Done (unreleased):** `InstallDeferredTriggers` assigns versions at commit in sorted order. Under 20 concurrent writers in random table orders, immediate mode aborted 194 of 200 transactions for deadlocks, deferred mode none. Writers read their version after the commit.
-  - ~~Key-mapping triggers for joined tables~~ **Done (unreleased):** `InstallKeyMappingTrigger` runs an application query over a joined table's changed rows and logs only the affected dataset keys, in immediate or deferred mode, instead of reloading the whole dataset.
+  - ~~Deferred, sorted trigger variant~~ **Done (v0.3.0):** `InstallDeferredTriggers` assigns versions at commit in sorted order. Under 20 concurrent writers in random table orders, immediate mode aborted 194 of 200 transactions for deadlocks, deferred mode none. Writers read their version after the commit.
+  - ~~Key-mapping triggers for joined tables~~ **Done (v0.3.0):** `InstallKeyMappingTrigger` runs an application query over a joined table's changed rows and logs only the affected dataset keys, in immediate or deferred mode, instead of reloading the whole dataset.
   - **Fixed:** triggers were named after their table only, so a second dataset with triggers on the same table silently replaced the first's. Names now include the dataset, and reinstalling removes that dataset's old-named triggers.
-  - ~~Snapshot loading from a read replica~~ **Done (unreleased):** `Table.SnapshotPool` reads full snapshots on a replica when catching up from its version will work, and on the primary otherwise. Checked against a real hot standby with replay paused.
+  - ~~Snapshot loading from a read replica~~ **Done (v0.3.0):** `Table.SnapshotPool` reads full snapshots on a replica when catching up from its version will work, and on the primary otherwise. Checked against a real hot standby with replay paused.
 
 ## Change notification (proposed)
 

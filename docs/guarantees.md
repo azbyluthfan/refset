@@ -62,7 +62,8 @@ The dataset lives in process memory.
 - Keep a real `PollInterval` (the default 1s). Notifications only shorten delivery; polling guarantees it.
 - Set `MaxStaleness` to at least 2× `PollInterval` on datasets used for fail-closed decisions, and read them with `GetFresh`.
 - Give sources a `KeyLoader` if a slow replica should fall back to the source rather than return `ErrNotCaughtUp`. At most `MaxConcurrentFallbacks` (default 32) fallback calls run at once per dataset; beyond that, reads get `ErrNotCaughtUp` at once rather than adding to a struggling source's load.
-- Set `refsethttp.Config.SigningKey` on endpoints that untrusted clients can reach, so forged versions are ignored ([security model](security.md)).
-- Read from the primary. A source that reads from a lagging copy (a database read replica, a change stream consumed with lag) breaks read-your-writes: legitimate versions look like `ErrVersionAhead`.
-- Sign version headers (`refsethttp.Config.SigningKey`) when clients are on the public internet.
-- Watch `Stats()`: `Staleness`, `LagVersions`, `PollErrors`, `Reloads`, `Fallbacks`.
+- Set `refsethttp.Config.SigningKey` on endpoints that untrusted clients can reach, so forged versions are ignored ([security model](security.md)). Without it, polls for forged versions are rate-limited, but still answered.
+- Read from the primary. A source that reads from a lagging copy (a database read replica, a change stream consumed with lag) breaks read-your-writes: legitimate versions look like `ErrVersionAhead`. Full snapshots alone may come from a replica when catching up from its version through the primary works, as the Postgres example's `Table.SnapshotPool` checks.
+- Set `ReloadInterval` and `Reconcile` to detect changes the source never reports, and alert on `Stats().Divergences`.
+- Watch `Stats()`: `Staleness`, `LagVersions`, `PollErrors`, `Panics`, `Reloads`, `Fallbacks`, `Divergences`. `refsetexpvar.Publish` serves them at `/debug/vars`.
+- Treat values as read-only; `refsettest.DetectValueMutation` finds code that changes them.

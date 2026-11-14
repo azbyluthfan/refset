@@ -9,6 +9,7 @@ How refset uses memory and CPU caches, what that means for your data, and the ru
 - Keep values small, or store pointers to large ones.
 - The shard count follows the dataset's size; leave `Options.Shards` at 0 unless you have measured a reason.
 - A reload that changes little needs little extra memory when values can be compared (`==`, or `ReloadSource.Equal`). Otherwise the dataset must fit in memory twice, because a reload builds a new copy before swapping.
+- In a container, set `GOMEMLIMIT` to about 90% of the limit and size the container at 2× the process's steady Go memory or more; at 1.25× the GC runs several times more often ([details](#tuning-the-gc-for-a-large-dataset)).
 
 ## How the CPU caches your data
 

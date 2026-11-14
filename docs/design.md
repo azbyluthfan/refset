@@ -273,12 +273,41 @@ type Options struct {
     MaxLagVersions         uint64        // 0 → unchecked
     MaxConcurrentFallbacks int           // 0 → 32; -1 → unlimited
     ReloadInterval         time.Duration // 0 → never; periodic full reload to bound unlogged-change divergence (§4.10)
+    Reconcile              bool          // compare each periodic reload with the replaced version; needs ReloadInterval (§4.10)
     Clock                  Clock         // nil → real clocks (monotonic + wall)
     Logger                 *slog.Logger  // nil → discard
 }
 
 func ContextWithMinVersion(ctx context.Context, dataset string, v uint64) context.Context
 func MinVersion(ctx context.Context, dataset string) (uint64, bool)
+
+// A Source built from the application's own load and version functions.
+type ReloadSource[K comparable, V any] struct {
+    Dataset string
+    Load    func(ctx context.Context) (version uint64, values []V, err error)
+    Key     func(V) K
+    Version func(ctx context.Context) (uint64, error)           // optional, cheap
+    Notify  func(ctx context.Context) (<-chan uint64, error)    // optional
+    Equal   func(a, b V) bool                                   // optional; lets reloads keep unchanged shards
+}
+
+// Wraps a Source with a copy on local disk, for restarts (§4.4).
+type SnapshotFile[K comparable, V any] struct {
+    Source[K, V]
+    Path   string
+    MaxAge time.Duration
+}
+func (f *SnapshotFile[K, V]) Save(s Snapshot[K, V]) error
+
+// Returned in place of a panic in source code (Source, KeyLoader, ReloadSource functions).
+type PanicError struct {
+    Value any
+    Stack []byte
+}
+
+// Stats(): Name, AppliedVersion, HeadVersion, LagVersions, Staleness, Entries, Shards, LastApply,
+// Waiters, Polls, PollErrors, Reloads, Panics, Fallbacks, Applies, ShardsCopied, EntriesCopied,
+// ShardsKept, Reconciles, Divergences.
 
 var (
     ErrNotCaughtUp      = errors.New("refset: not caught up to requested version")
@@ -294,10 +323,13 @@ There are no functional options. `Options` is a plain, non-generic struct (like 
 Packages in the library module (all stdlib only):
 
 - `refset`: core dataset, snapshots, waiters, staleness, context helpers, and `ReloadSource` (a source built from a load function and a version function).
-- `refset/refsettest`: `MemSource` with controllable delays, drops, partitions, errors and compaction; `FakeClock` (monotonic and wall readings move independently); `RunConformance`.
+- `refset/refsettest`: `MemSource` with controllable delays, drops, partitions, errors and compaction; `FakeClock` (monotonic and wall readings move independently); `RunConformance`; `DetectValueMutation`.
 - `refset/refsethttp`: header and cookie helpers and middleware.
+- `refset/refsetexpvar`: publishes `Stats` at `/debug/vars` through the standard library's `expvar` (a separate package because importing `expvar` registers that handler).
 
-Outside the library (separate modules, any dependencies): `examples/` (including `pgsource`, `filesource`, and the `ReloadSource` examples `structs`, `dbrows`, `httpjson`) and `bench/`.
+`Dataset.GetCtx`, the old name of `GetForRequest`, remains as a deprecated alias until v0.4.0.
+
+Outside the library (separate modules, any dependencies): `examples/` (including `pgsource`, `filesource`, the `ReloadSource` examples `structs`, `dbrows`, `httpjson`, and the `restart` example of `SnapshotFile`) and `bench/` (benchmarks and `perfreport`).
 
 ## 6. Usage Examples
 
@@ -471,25 +503,30 @@ Single-table datasets need nothing extra. Key-mapping triggers (a trigger on a j
 ```
 refset/
   go.mod                      # module github.com/azbyluthfan/refset (zero requires)
-  dataset.go snapshot.go shard.go apply.go waiters.go staleness.go singleflight.go
-  options.go errors.go stats.go source.go delta.go context.go doc.go
-  refsettest/                 # MemSource (fault injection), RunConformance, FakeClock
-  refsethttp/                 # Middleware, SetVersion(s), ParseMinVersion, Config
-  internal/model/             # reference map model for property tests
-  internal/scenario/          # in-process multi-replica scenario tests
+  dataset.go options.go stats.go errors.go context.go doc.go
+  source.go reload_source.go  # the Source contract; ReloadSource
+  snapshot.go apply.go load.go waiters.go singleflight.go staleness.go clock.go cacheline.go
+  reconcile.go snapshotfile.go panic.go
+  refsettest/                 # MemSource and Replica (fault injection), RunConformance, FakeClock, DetectValueMutation
+  refsethttp/                 # Middleware, SetVersion(s), ParseVersions, Config (signing, cookies)
+  refsetexpvar/               # Publish: Stats at /debug/vars
+  internal/scenario/          # in-process multi-replica scenario tests and the soak test
   examples/                   # separate go.mod; may use any dependency
-    pgsource/                 # reference Postgres Source, Write, schema, triggers
+    pgsource/                 # reference Postgres Source: Write, schema, immediate and deferred triggers,
+                              # key-mapping triggers, snapshots from a read replica
     filesource/               # JSON snapshot + append-only change file
     structs/ dbrows/ httpjson/ # ReloadSource over app structs, app SQL, a JSON API
+    restart/                  # SnapshotFile: restart from local disk
     currencies/               # 6.1
     plan-upgrade/             # 6.2: billing + two replicas + Postgres, docker compose
     baseline-lru/             # same scenario with golang-lru, showing the stale answer
-  bench/                      # separate go.mod: Get vs golang-lru / RWMutex map, value size; memreport (bytes per entry, GC pauses)
+  bench/                      # separate go.mod: Get vs golang-lru / RWMutex map, value size;
+                              # memreport; perfreport (latency, GC, memory, scale, nested, memory limits)
   docs/
     design.md                 # this document
     source-contract.md        # §4.2 in full
     guarantees.md             # exactly what is and is not guaranteed
-    guarantees.md  performance.md  benchmarks.md
+    performance.md  benchmarks.md  security.md  roadmap.md  releasing.md
   go.work
 ```
 
@@ -588,11 +625,11 @@ One hour in-process with `MemSource`: random writes at a steady low rate, random
 
 ### 8.8 CI
 
-Every push: lint (including the zero-requires check and DCO), unit, property, race, conformance and scenario tests, with no Docker. A separate examples job runs Postgres 15 and 17 as GitHub Actions service containers, runs the examples' tests against them (`REFSET_PG_URL`) and runs every demo; a broken example never blocks a library change. Soak and performance checks run manually before a release; results are in [benchmarks.md](benchmarks.md).
+Every push and pull request: lint (golangci-lint with gosec, the zero-requires check, DCO), unit, property, race, conformance and scenario tests, with no Docker, on Linux x86-64 and ARM64, Windows and macOS, as 32-bit x86 and with `GOMAXPROCS` 1 and 2; CodeQL's security-extended queries; workflow checks (actionlint, shellcheck). A separate examples job runs Postgres 15 and 17 as GitHub Actions service containers, runs the examples' tests against them (`REFSET_PG_URL`) and runs every demo; a broken example never blocks a library change. Weekly: a 45-minute soak, every fuzz target in parallel, govulncheck, the newest Go and Postgres, s390x and 32-bit ARM under QEMU, WebAssembly under wasmtime, and perfreport on x86-64 and ARM64 runners for trends. Before a release, `make bench-compare` and `make perfreport`; results are in [benchmarks.md](benchmarks.md).
 
 ## 9. Roadmap
 
-Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of tail latency, propagation latency, GC CPU and reload memory (`bench/perfreport`), automatic shard sizing, an adaptive batch window, and pre-sized, diffed reloads. Investigated and not adopted: a single-hash shard table and pointer-free storage (P2). Next: exploration of memory limits, real-source costs, other machines and operating systems, and security (P3). Planned: a reconcile check that detects unlogged changes, an optional local snapshot file for faster restarts, metrics adapters built on `Stats()`, more example sources, gRPC helpers, and promoting `pgsource` to an official `refsetpg` module once there is demand.
+Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of latency, GC and memory (`bench/perfreport`); automatic shard sizing, an adaptive batch window, and pre-sized, diffed reloads (v0.2); the reconcile check, `SnapshotFile`, panic recovery, the fallback cap, rate-limited forged-version polls, the `GOMEMLIMIT` rule and platform coverage (v0.3). Investigated and not adopted: a single-hash shard table and pointer-free storage. Open: measuring real-source costs with Postgres, dedicated-machine benchmarks, real suspend tests, change notification, and the ecosystem items (metrics adapters, more example sources, gRPC helpers, promoting `pgsource` to `refsetpg`) when there is demand.
 
 ## 10. Risks and Open Questions
 

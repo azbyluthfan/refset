@@ -123,6 +123,14 @@ Supports G4.
 
 Supports G4.
 
+## Failures, cancellation and panics
+
+These aren't contract requirements; they describe how a dataset treats a source that misbehaves.
+
+- **Errors** from `Changes` or `LoadSnapshot` fail that poll: the dataset keeps its last version, counts the error in `Stats().PollErrors`, retries on its next poll, and `GetFresh` fails closed once the replica has gone `MaxStaleness` without confirming it is current.
+- **Panics** in any source method, a `KeyLoader`, or a `ReloadSource` function are recovered and returned as a `*refset.PanicError` with the stack: on the background loop they fail the poll like an error (and are counted in `Stats().Panics`); in a fallback, every read sharing that call gets the error; during `Open`, `Open` returns it. Don't rely on this: a panic is still a bug.
+- **Cancellation.** Methods must return promptly when their context ends (see Concurrency). If one doesn't, `Close`, which cancels the background loop's context, waits up to 10 seconds for the current call, then returns an error and leaves the call running.
+
 ## Concurrency
 
 - The dataset calls `LoadSnapshot`, `Changes` and `Watch` from its single update loop; they are never called concurrently with each other for one dataset.
