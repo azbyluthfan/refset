@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"sync"
 	"time"
@@ -134,4 +136,74 @@ func ExampleReloadSource() {
 	// Output:
 	// 6.3e-05
 	// 6.1e-05
+}
+
+// Restart from a snapshot saved on local disk: Open serves the file's data at
+// once and catches up with the source in the background. GetFresh refuses
+// until it has, so fail-closed checks never act on old data.
+func ExampleSnapshotFile() {
+	dir, err := os.MkdirTemp("", "refset-example-")
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	src := refsettest.NewMemSource[string, Plan](PlansDataset)
+	src.Upsert("user-1", Plan{Tier: "pro"})
+	file := &refset.SnapshotFile[string, Plan]{Source: src, Path: filepath.Join(dir, "plans.snap")}
+
+	// First run: load from the source, save before shutting down.
+	plans, err := refset.Open(context.Background(), file, refset.Options{})
+	if err != nil {
+		panic(err)
+	}
+	if err := file.Save(plans.Snapshot()); err != nil {
+		panic(err)
+	}
+	_ = plans.Close()
+
+	// Restart: the dataset starts from the file, then catches up.
+	plans, err = refset.Open(context.Background(), file, refset.Options{})
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = plans.Close() }()
+	p, _ := plans.Get("user-1")
+	fmt.Println(p.Tier, plans.Version(), src.LoadCalls())
+	// Output: pro 1 1
+}
+
+// Detect changes the source's feed missed: compare each periodic reload with
+// the version it replaces, and count the entries that differ although the
+// source reported no change. Alert on Stats().Divergences.
+func ExampleOptions_reconcile() {
+	src := refsettest.NewMemSource[string, Plan](PlansDataset)
+	src.Upsert("user-1", Plan{Tier: "free"})
+	clock := refsettest.NewFakeClock(time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC))
+	plans, err := refset.Open(context.Background(), src, refset.Options{
+		Clock:          clock,
+		ReloadInterval: 10 * time.Minute,
+		Reconcile:      true,
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = plans.Close() }()
+
+	// Someone edits the data without the change being logged: same version,
+	// different content.
+	state := src.State()
+	state["user-1"] = Plan{Tier: "pro"}
+	src.Restore(src.Head(), state)
+
+	for clock.Timers() < 2 { // the poll and reload timers are armed
+		time.Sleep(time.Millisecond)
+	}
+	clock.Advance(10 * time.Minute) // the periodic reload runs
+	for plans.Stats().Reconciles == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	p, _ := plans.Get("user-1")
+	fmt.Println(plans.Stats().Divergences, p.Tier)
+	// Output: 1 pro
 }

@@ -54,9 +54,10 @@ go get github.com/azbyluthfan/refset@latest
 |---|---|---|
 | `refset` | `github.com/azbyluthfan/refset` | datasets, sources, version-aware reads |
 | `refsethttp` | `github.com/azbyluthfan/refset/refsethttp` | carrying versions over HTTP (headers, cookies, signing) |
-| `refsettest` | `github.com/azbyluthfan/refset/refsettest` | tests: in-memory source with faults, fake clock, `RunConformance` |
+| `refsettest` | `github.com/azbyluthfan/refset/refsettest` | tests: in-memory source with faults, fake clock, `RunConformance`, `DetectValueMutation` |
+| `refsetexpvar` | `github.com/azbyluthfan/refset/refsetexpvar` | publishing `Stats` at `/debug/vars` through the standard library's `expvar` |
 
-All three are in one module with no dependencies. While refset is at v0.x, a minor release may change the API; the [CHANGELOG](CHANGELOG.md) says what to change.
+All four are in one module with no dependencies. While refset is at v0.x, a minor release may change the API; the [CHANGELOG](CHANGELOG.md) says what to change.
 
 **Quick start.** A complete program: your own code holds plans and a version, and refset serves them from memory.
 
