@@ -45,6 +45,17 @@ type Table[K comparable, V any] struct {
 	// BacklogLimit is the number of changed keys above which the source asks
 	// replicas to reload a full snapshot instead. Default 10,000.
 	BacklogLimit int
+
+	// SnapshotPool, if set, is a pool on a read replica (a hot standby of the
+	// same primary) where full snapshots are read, to spare the primary when
+	// many processes start or reload. A replica's REPEATABLE READ snapshot is
+	// a real committed state at the replica's version, and the dataset catches
+	// up from it through Changes, which, like LoadKey and Watch, stays on the
+	// primary. Before reading, LoadSnapshot checks on the primary that the
+	// catch-up will work (no compaction past the replica's version, no reload
+	// marker after it, a backlog within BacklogLimit); if not, or if the
+	// replica is unreachable, it reads from the primary instead.
+	SnapshotPool *pgxpool.Pool
 }
 
 // KeyCodec converts keys to and from text. Encode must produce what writers
@@ -105,8 +116,15 @@ func readOnlyRR() pgx.TxOptions {
 }
 
 // LoadSnapshot implements refset.Source: the version and the full query are
-// read in one REPEATABLE READ transaction, so they agree (contract C1).
+// read in one REPEATABLE READ transaction, so they agree (contract C1). With
+// Table.SnapshotPool, from the replica when catching up from its version
+// will work.
 func (s *Source[K, V]) LoadSnapshot(ctx context.Context, add func(K, V)) (uint64, error) {
+	if s.t.SnapshotPool != nil {
+		if v, used, err := s.loadFromReplica(ctx, add); used {
+			return v, err
+		}
+	}
 	tx, err := s.pool.BeginTx(ctx, readOnlyRR())
 	if err != nil {
 		return 0, err
@@ -132,6 +150,69 @@ func (s *Source[K, V]) LoadSnapshot(ctx context.Context, add func(K, V)) (uint64
 		return 0, err
 	}
 	return head, tx.Commit(ctx)
+}
+
+// loadFromReplica reads the snapshot on Table.SnapshotPool. used is false
+// when it added nothing and the caller should read from the primary: the
+// replica is unreachable, or its version is too far behind for Changes to
+// catch up from. Once entries have been added, errors are returned as is (the
+// dataset discards a failed load and retries).
+func (s *Source[K, V]) loadFromReplica(ctx context.Context, add func(K, V)) (version uint64, used bool, err error) {
+	tx, err := s.t.SnapshotPool.BeginTx(ctx, readOnlyRR())
+	if err != nil {
+		return 0, false, nil
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var v int64
+	if err := tx.QueryRow(ctx,
+		`SELECT coalesce((SELECT version FROM refset_versions WHERE dataset = $1), 0)`, s.t.Dataset).Scan(&v); err != nil || v < 0 {
+		return 0, false, nil
+	}
+	if ok, err := s.catchUpPossible(ctx, uint64(v)); err != nil || !ok {
+		return 0, false, nil
+	}
+	rows, err := tx.Query(ctx, s.t.Query)
+	if err != nil {
+		return 0, false, nil
+	}
+	defer rows.Close()
+	added := false
+	for rows.Next() {
+		val, err := s.t.Scan(rows)
+		if err != nil {
+			return 0, added, err
+		}
+		add(s.t.Key(val), val)
+		added = true
+	}
+	if err := rows.Err(); err != nil {
+		return 0, added, err
+	}
+	return uint64(v), true, tx.Commit(ctx)
+}
+
+// catchUpPossible reports whether Changes(after) on the primary would return
+// changes rather than ErrSnapshotRequired: after is within the history the
+// primary keeps, no reload marker follows it, and the backlog of changed keys
+// is within BacklogLimit.
+func (s *Source[K, V]) catchUpPossible(ctx context.Context, after uint64) (bool, error) {
+	head, compacted, err := headOf(ctx, s.pool, s.t.Dataset)
+	if err != nil || after > head || after < compacted {
+		return false, err
+	}
+	var reload bool
+	var keys int
+	err = s.pool.QueryRow(ctx, `
+		SELECT
+			EXISTS (SELECT 1 FROM refset_changelog
+			        WHERE dataset = $1 AND version > $2 AND version <= $3 AND reload),
+			(SELECT count(*) FROM (SELECT DISTINCT key FROM refset_changelog
+			        WHERE dataset = $1 AND version > $2 AND version <= $3 AND NOT reload LIMIT $4) AS k)`,
+		s.t.Dataset, int64(after), int64(head), s.t.BacklogLimit+1).Scan(&reload, &keys)
+	if err != nil {
+		return false, err
+	}
+	return !reload && keys <= s.t.BacklogLimit, nil
 }
 
 // Changes implements refset.Source. An idle poll is one statement (the head

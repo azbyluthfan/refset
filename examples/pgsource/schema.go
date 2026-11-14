@@ -19,7 +19,8 @@
 //
 //   - The pool must point at the primary. Every read checks
 //     pg_is_in_recovery() and fails with ErrStandby on a standby, because a
-//     lagging copy breaks read-your-writes (Source contract C3, C6).
+//     lagging copy breaks read-your-writes (Source contract C3, C6). Full
+//     snapshots alone may come from a replica: see Table.SnapshotPool.
 //   - Every change to a replicated table must be logged, through Write or
 //     through InstallTriggers. Unlogged changes leave replicas diverged until
 //     their next reload (design §4.10).

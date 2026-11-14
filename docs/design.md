@@ -458,7 +458,7 @@ Single-table datasets need nothing extra. Key-mapping triggers (a trigger on a j
 
 - The pool passed to `NewSource` must point at the primary. `NewSource` checks `SELECT pg_is_in_recovery()` on first use and returns an error if it is connected to a standby.
 - Through a connection pooler or load balancer, the route must go to the primary; the check also catches misrouting after a failover on reconnect.
-- Loading the full snapshot from a read replica is safe in principle (a consistent snapshot at an older version, then caught up from the primary) and could save primary load on startup, but is left for later. v0.1 reads everything from the primary.
+- **Full snapshots from a read replica** (`Table.SnapshotPool`): a replica's REPEATABLE READ snapshot is a consistent committed state at the replica's version (C1), and the dataset catches up from it through `Changes` on the primary. Before reading, `LoadSnapshot` checks on the primary that this catch-up will work: the replica's version is within the history the primary keeps, no reload marker follows it, and the backlog of changed keys is within `BacklogLimit`. Otherwise, or if the replica is unreachable, it reads from the primary, so a replica lagging far behind can't cause repeated reloads. Tested against a simulated lagging replica in CI and against a real hot standby with replay paused.
 
 **Example-level choices:** pgx v5 only (no `database/sql`; `LISTEN` and `REPEATABLE READ` are much cleaner with pgx); row scanning optional, defaulting to `pgx.RowToStructByName`; versions are `uint64` in Go and `bigint` in the database, with negative values rejected on read; changelog keys are text, encoded by `Table.KeyCodec` (default `strconv`/`fmt` for string and integer keys).
 

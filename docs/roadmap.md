@@ -132,7 +132,7 @@ Questions the docs make claims about without having tested them, or where real d
   - ~~Deferred, sorted trigger variant~~ **Done (unreleased):** `InstallDeferredTriggers` assigns versions at commit in sorted order. Under 20 concurrent writers in random table orders, immediate mode aborted 194 of 200 transactions for deadlocks, deferred mode none. Writers read their version after the commit.
   - ~~Key-mapping triggers for joined tables~~ **Done (unreleased):** `InstallKeyMappingTrigger` runs an application query over a joined table's changed rows and logs only the affected dataset keys, in immediate or deferred mode, instead of reloading the whole dataset.
   - **Fixed:** triggers were named after their table only, so a second dataset with triggers on the same table silently replaced the first's. Names now include the dataset, and reinstalling removes that dataset's old-named triggers.
-  - Snapshot loading from a read replica.
+  - ~~Snapshot loading from a read replica~~ **Done (unreleased):** `Table.SnapshotPool` reads full snapshots on a replica when catching up from its version will work, and on the primary otherwise. Checked against a real hot standby with replay paused.
 
 ## Ecosystem track
 
