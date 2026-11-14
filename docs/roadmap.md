@@ -134,9 +134,13 @@ Questions the docs make claims about without having tested them, or where real d
   - **Fixed:** triggers were named after their table only, so a second dataset with triggers on the same table silently replaced the first's. Names now include the dataset, and reinstalling removes that dataset's old-named triggers.
   - ~~Snapshot loading from a read replica~~ **Done (unreleased):** `Table.SnapshotPool` reads full snapshots on a replica when catching up from its version will work, and on the primary otherwise. Checked against a real hot standby with replay paused.
 
+## Change notification (proposed)
+
+Applications that keep something derived from a dataset (a compiled rule set, a search index, a cache of rendered pages) can only notice changes today by polling `Version()`. A way to be told when a new version is applied would let them rebuild exactly when needed. Open questions before building it: a callback or a channel; what happens when a consumer is slow (drop to the latest version, or block the loop, which must never happen); whether consumers get the changed keys or only the new version; and how full reloads are reported. To be designed on its own rather than added to a release in passing.
+
 ## Ecosystem track
 
-- Metrics adapters built on `Stats()` (OpenTelemetry, Prometheus), as separate modules.
+- Metrics adapters built on `Stats()` (OpenTelemetry, Prometheus), as separate modules. `refsetexpvar` (standard library only) already publishes `Stats` at `/debug/vars`.
 - Promote `examples/pgsource` to an official `refsetpg` module once people run it in production.
 - More example sources (MySQL, NATS KV, HTTP snapshot + changes); community sources listed in the README.
 - gRPC metadata helpers, as a separate module.

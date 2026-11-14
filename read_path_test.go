@@ -26,13 +26,13 @@ func TestReadPathDoesNotAllocate(t *testing.T) {
 	withVersion := refset.ContextWithMinVersion(ctx, "plans", v)
 
 	reads := map[string]func(){
-		"Get":                   func() { d.Get("ka") },
-		"Snapshot.Get":          func() { s := d.Snapshot(); s.Get("ka") },
-		"GetAtLeast(satisfied)": func() { _, _, _ = d.GetAtLeast(ctx, "ka", v) },
-		"GetCtx(no version)":    func() { _, _, _ = d.GetCtx(ctx, "ka") },
-		"GetCtx(satisfied)":     func() { _, _, _ = d.GetCtx(withVersion, "ka") },
-		"GetFresh(fresh)":       func() { _, _, _ = d.GetFresh("ka") },
-		"Version":               func() { d.Version() },
+		"Get":                       func() { d.Get("ka") },
+		"Snapshot.Get":              func() { s := d.Snapshot(); s.Get("ka") },
+		"GetAtLeast(satisfied)":     func() { _, _, _ = d.GetAtLeast(ctx, "ka", v) },
+		"GetForRequest(no version)": func() { _, _, _ = d.GetForRequest(ctx, "ka") },
+		"GetForRequest(satisfied)":  func() { _, _, _ = d.GetForRequest(withVersion, "ka") },
+		"GetFresh(fresh)":           func() { _, _, _ = d.GetFresh("ka") },
+		"Version":                   func() { d.Version() },
 	}
 	for name, read := range reads {
 		if n := testing.AllocsPerRun(1000, read); n != 0 {

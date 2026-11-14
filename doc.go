@@ -31,8 +31,9 @@
 //
 // For large datasets that change often, implement [Source] with per-key
 // changes. Package refsethttp carries versions between services for
-// read-your-writes, and package refsettest checks a Source against the
-// contract.
+// read-your-writes, package refsettest checks a Source against the contract
+// and helps test code that reads datasets, and package refsetexpvar
+// publishes Stats at /debug/vars.
 //
 // The API is experimental until v1.0: a minor release may change it.
 // Documentation: the README (https://github.com/azbyluthfan/refset), the

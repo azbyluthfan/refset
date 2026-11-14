@@ -199,12 +199,12 @@ func (d *Dataset[K, V]) Snapshot() Snapshot[K, V] {
 }
 
 // Read path (design §4.11, rule R1): Get, Snapshot, GetFresh, and GetAtLeast /
-// GetCtx when the version is already applied must not write shared memory or
+// GetForRequest when the version is already applied must not write shared memory or
 // allocate. A write here would invalidate the cache line on every core that is
 // reading; read_path_test.go checks the allocation half of this rule.
 
 // Get returns the value for key from the current version. It never waits and
-// never fails; use GetAtLeast, GetCtx or GetFresh when freshness matters.
+// never fails; use GetAtLeast, GetForRequest or GetFresh when freshness matters.
 func (d *Dataset[K, V]) Get(key K) (V, bool) {
 	return d.root.Load().get(key)
 }
@@ -264,15 +264,24 @@ func (d *Dataset[K, V]) afterWait(key K, err error) (V, bool, error) {
 	return v, ok, nil
 }
 
-// GetCtx is GetAtLeast with the minimum version taken from ctx (see
-// ContextWithMinVersion) for this dataset's name. Without a minimum in ctx, it
-// behaves like Get.
-func (d *Dataset[K, V]) GetCtx(ctx context.Context, key K) (V, bool, error) {
+// GetForRequest reads key at the version the request needs: the minimum
+// version for this dataset carried in ctx (see ContextWithMinVersion, usually
+// set by refsethttp's middleware from the client's version header). With a
+// minimum it behaves like GetAtLeast, waiting for that version; without one,
+// like Get.
+func (d *Dataset[K, V]) GetForRequest(ctx context.Context, key K) (V, bool, error) {
 	if minVersion, ok := MinVersion(ctx, d.name); ok {
 		return d.GetAtLeast(ctx, key, minVersion)
 	}
 	v, ok := d.Get(key)
 	return v, ok, nil
+}
+
+// GetCtx is the old name of GetForRequest.
+//
+// Deprecated: Use GetForRequest. GetCtx will be removed in v0.4.0.
+func (d *Dataset[K, V]) GetCtx(ctx context.Context, key K) (V, bool, error) {
+	return d.GetForRequest(ctx, key)
 }
 
 // GetFresh returns the value for key only if the replica can confirm it is

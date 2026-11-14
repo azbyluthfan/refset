@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- **`refsetexpvar`**: `Publish(d)` adds a dataset's `Stats` to an `expvar` map named `refset`, served at `/debug/vars`. A separate package, because importing `expvar` registers that handler on `http.DefaultServeMux`; still standard library only.
+- **`Dataset.GetForRequest`**: the new name of `GetCtx` (below).
+- Runnable examples for `SnapshotFile`, `Options.Reconcile`, `refsettest.DetectValueMutation` and `refsetexpvar.Publish` on pkg.go.dev.
+
 - **`PanicError`** and **`Stats().Panics`**: panics in source code (a `Source`, `KeyLoader`, or `ReloadSource`'s functions) are recovered. On the background loop the poll fails and the dataset keeps its last version; during `Open` the panic is returned as an error.
 - **`refsettest.DetectValueMutation`**: fails a test when code under test changes a value it read from a dataset (values are shared by every reader).
 - **docs/security.md**: the security model: trust boundaries, threats and how each is handled.
@@ -20,6 +24,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- **`Dataset.GetCtx` is renamed `GetForRequest`.** It reads the minimum version a request carries and may wait for it or fail, which the `Ctx` suffix (usually "the same call, with cancellation") didn't suggest. `GetCtx` remains as a deprecated alias and will be removed in v0.4.0.
 - **`MaxConcurrentFallbacks` defaults to 32** (was unlimited): at most 32 fallback calls run at once per dataset, and further reads get `ErrNotCaughtUp` at once instead of piling onto a slow source. Set `-1` for the old unlimited behaviour.
 - **Polls for forged versions are rate-limited.** After a poll finds a requested version beyond the source's head, reads for unannounced versions poll at most once per `BatchWindow` for the next second. One client flooding forged versions made a replica poll its source ~3,860 times a second; now ~180. Without forged versions nothing changes.
 - `examples/filesource` creates its directory with mode 0750 and files with 0600.
