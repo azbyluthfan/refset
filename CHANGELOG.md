@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- **`PanicError`** and **`Stats().Panics`**: panics in source code (a `Source`, `KeyLoader`, or `ReloadSource`'s functions) are recovered. On the background loop the poll fails and the dataset keeps its last version; during `Open` the panic is returned as an error.
+- **`refsettest.DetectValueMutation`**: fails a test when code under test changes a value it read from a dataset (values are shared by every reader).
+- **docs/security.md**: the security model: trust boundaries, threats and how each is handled.
+- CI: gosec in golangci-lint for shipped code, and CodeQL's security-extended queries on pushes, pull requests and weekly. New fuzz targets for refreshes with arbitrary source answers, diffed reloads and snapshot file decoding.
+
 - **`Options.Reconcile`**: compares each periodic reload (`ReloadInterval`) with the version it replaces and counts entries that differ although the source reported no change to them, in the new `Stats().Divergences` (and `Stats().Reconciles`), with a warning in the log. It detects changes a source's feed missed: unlogged writes, manual edits, or a `ReloadSource` change made without bumping the version.
 - **`refset.SnapshotFile`**: wraps a source with a copy of the dataset on local disk. `Open` starts from the file and catches up through `Changes`; `GetFresh` fails closed until it has. The file is checked (checksum, dataset name, key and value types, optional `MaxAge`) and ignored if anything doesn't match. `Save` writes atomically with mode 0600 and refuses types gob would encode lossily. New `restart` example.
 - `examples/pgsource`: `InstallDeferredTriggers` and `InstallDeferredReloadTrigger`, a trigger mode that assigns versions at commit in sorted dataset order, so trigger-mode writers can't deadlock on version rows (immediate mode aborted 194 of 200 transactions in a 20-writer stress test; deferred mode none). Writers read their version with `CurrentVersions` after the commit. Needs PostgreSQL 13+.
@@ -13,8 +18,17 @@ All notable changes to this project are documented here. The format follows [Kee
 - `examples/pgsource`: `Table.SnapshotPool` reads full snapshots on a read replica to spare the primary when many processes start or reload. It is used only when catching up from the replica's version through the primary will work (no compaction past it, no reload marker after it, backlog within `BacklogLimit`); otherwise, or when the replica is unreachable, snapshots come from the primary.
 - `perfreport -sections memlimit`: sweeps `GOMEMLIMIT` from no limit to 1.25× of steady memory with `GOGC` 100 and off.
 
+### Changed
+
+- **`MaxConcurrentFallbacks` defaults to 32** (was unlimited): at most 32 fallback calls run at once per dataset, and further reads get `ErrNotCaughtUp` at once instead of piling onto a slow source. Set `-1` for the old unlimited behaviour.
+- **Polls for forged versions are rate-limited.** After a poll finds a requested version beyond the source's head, reads for unannounced versions poll at most once per `BatchWindow` for the next second. One client flooding forged versions made a replica poll its source ~3,860 times a second; now ~180. Without forged versions nothing changes.
+- `examples/filesource` creates its directory with mode 0750 and files with 0600.
+
 ### Fixed
 
+- A panic in a fallback (`KeyLoader`) call shared by several reads gave the other reads an empty "no such key" answer with no error. They now all get the `*PanicError`.
+- `Close` hung forever if the source ignored context cancellation; it now returns an error after 10 seconds.
+- `SnapshotFile` bounds the body length in a file's header by the file's real size before using it.
 - `examples/pgsource`: triggers were named after their table only, so installing triggers for a second dataset on the same table silently replaced the first dataset's, which then missed every change. Trigger names now include the dataset; reinstalling removes that dataset's triggers with the old names, and leaves other datasets' alone.
 
 ### Documentation

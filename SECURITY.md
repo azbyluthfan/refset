@@ -12,4 +12,6 @@ Include what you found, how to reproduce it, and the impact you expect. You shou
 
 ## Scope
 
+The security model (what refset trusts, the threats it handles and how) is in [docs/security.md](docs/security.md).
+
 Relevant areas include anything that could make a replica serve wrong or stale data while reporting it as fresh, ways a client could force excessive source or fallback load (for example through version headers), and weaknesses in the optional header signing in `refsethttp`.

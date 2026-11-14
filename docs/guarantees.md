@@ -61,7 +61,8 @@ The dataset lives in process memory.
 
 - Keep a real `PollInterval` (the default 1s). Notifications only shorten delivery; polling guarantees it.
 - Set `MaxStaleness` to at least 2× `PollInterval` on datasets used for fail-closed decisions, and read them with `GetFresh`.
-- Give sources a `KeyLoader` if a slow replica should fall back to the source rather than return `ErrNotCaughtUp`; consider `MaxConcurrentFallbacks` to cap the load.
+- Give sources a `KeyLoader` if a slow replica should fall back to the source rather than return `ErrNotCaughtUp`. At most `MaxConcurrentFallbacks` (default 32) fallback calls run at once per dataset; beyond that, reads get `ErrNotCaughtUp` at once rather than adding to a struggling source's load.
+- Set `refsethttp.Config.SigningKey` on endpoints that untrusted clients can reach, so forged versions are ignored ([security model](security.md)).
 - Read from the primary. A source that reads from a lagging copy (a database read replica, a change stream consumed with lag) breaks read-your-writes: legitimate versions look like `ErrVersionAhead`.
 - Sign version headers (`refsethttp.Config.SigningKey`) when clients are on the public internet.
 - Watch `Stats()`: `Staleness`, `LagVersions`, `PollErrors`, `Reloads`, `Fallbacks`.

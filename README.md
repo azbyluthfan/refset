@@ -215,6 +215,7 @@ Experimental. The latest release is v0.2.0; the API may change before v1.0. See 
 - [Guarantees](docs/guarantees.md): what is and isn't promised, staleness and memory behavior
 - [Source contract](docs/source-contract.md): what a `Source` must guarantee
 - [Performance and memory](docs/performance.md) and [benchmarks](docs/benchmarks.md)
+- [Security model](docs/security.md): trust boundaries, threats and how they're handled
 - [Roadmap](docs/roadmap.md): what comes after v0.1.0
 
 ## Contributing
