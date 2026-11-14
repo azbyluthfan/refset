@@ -13,11 +13,11 @@ Nothing here is a promise of dates. Items move up when users ask for them; open 
 | **v0.2.0**: performance P0 and P1 (automatic shards, adaptive batching, diffed reloads) | Released 2026-11-11 ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.2.0)) |
 | Performance P2: storage layout | Investigated, not adopted ([results](benchmarks.md#shard-storage-experiment-p2)) |
 | Large datasets (10M) and nested values; memory limits (P3a) | Measured ([large data](benchmarks.md#large-datasets-and-nested-values), [memory limits](benchmarks.md#memory-limits)) |
-| Correctness and operations: reconcile check, `SnapshotFile`, `pgsource` deferred and key-mapping triggers, replica snapshots | Done, ships in v0.3.0 |
-| Security (P3c): panic recovery, fallback cap, forged-version rate limit, fuzzing, static analysis, threat model | Done, ships in v0.3.0 |
-| Platforms (P3b): Linux x86-64 and ARM64, Windows, macOS, 32-bit, big-endian, WebAssembly, 1–2 CPUs in CI | Done, ships in v0.3.0 |
-| `refsetexpvar`, `GetForRequest`, runnable examples | Done, ships in v0.3.0 |
-| **v0.3.0** | **Releasing** ([CHANGELOG](../CHANGELOG.md)) |
+| Correctness and operations: reconcile check, `SnapshotFile`, `pgsource` deferred and key-mapping triggers, replica snapshots | Done |
+| Security (P3c): panic recovery, fallback cap, forged-version rate limit, fuzzing, static analysis, threat model | Done |
+| Platforms (P3b): Linux x86-64 and ARM64, Windows, macOS, 32-bit, big-endian, WebAssembly, 1–2 CPUs in CI | Done |
+| `refsetexpvar`, `GetForRequest`, runnable examples | Done |
+| **v0.3.0**: correctness, operations, security and platforms (the four rows above) | Released 2026-11-14 ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.3.0)) |
 | **Next** | The rest of P3 (real-Postgres measurement, dedicated-machine benchmarks, suspend tests), change notification, ecosystem items on demand |
 
 ## Performance track
