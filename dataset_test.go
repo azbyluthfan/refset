@@ -460,9 +460,11 @@ func TestHistoryResetReloads(t *testing.T) {
 	}
 	d := open(t, src, refset.Options{PollInterval: 5 * time.Millisecond})
 	src.Restore(1, map[string]int{"k": 100}) // a backup from version 1
-	eventually(t, "reload after reset", func() bool { return d.Stats().Reloads >= 1 })
-	if v, _ := d.Get("k"); v != 100 || d.Version() != 1 {
-		t.Fatalf("after reset: k=%d v%d", v, d.Version())
+	// Reloads is counted before the reloaded version is installed: wait for
+	// the data, not the counter.
+	eventually(t, "reload after reset", func() bool { v, _ := d.Get("k"); return v == 100 && d.Version() == 1 })
+	if d.Stats().Reloads < 1 {
+		t.Fatal("the reset wasn't counted as a reload")
 	}
 }
 

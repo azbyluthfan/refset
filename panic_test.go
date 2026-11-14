@@ -50,12 +50,14 @@ func TestPanicInChangesFailsThePoll(t *testing.T) {
 
 	src.changes.Store(true)
 	mem.Upsert("a", 2)
-	eventually(t, "panic recovered", func() bool { return d.Stats().Panics == 1 })
+	// Panics and PollErrors are separate counters, incremented one after the
+	// other by the loop: wait for both.
+	eventually(t, "panic recovered and counted as a poll error", func() bool {
+		st := d.Stats()
+		return st.Panics == 1 && st.PollErrors > 0
+	})
 	if v, _ := d.Get("a"); v != 1 {
 		t.Fatalf("a = %d after a failed poll, want the last version's 1", v)
-	}
-	if st := d.Stats(); st.PollErrors == 0 {
-		t.Fatal("the panic wasn't counted as a poll error")
 	}
 	clock.Advance(3 * time.Second)
 	eventually(t, "fails closed while the source panics", func() bool {
