@@ -1,8 +1,11 @@
 package refset_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"maps"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,8 +21,13 @@ const reloadEvery = 10 * time.Minute
 // next periodic reload and waits for its reconcile to finish.
 func reconcileFixture[V any](t *testing.T, src refset.Source[string, V]) (*refset.Dataset[string, V], func()) {
 	t.Helper()
+	return reconcileFixtureLog(t, src, nil)
+}
+
+func reconcileFixtureLog[V any](t *testing.T, src refset.Source[string, V], log *slog.Logger) (*refset.Dataset[string, V], func()) {
+	t.Helper()
 	clock := refsettest.NewFakeClock(time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC))
-	d := open(t, src, refset.Options{Clock: clock, PollInterval: 24 * time.Hour, ReloadInterval: reloadEvery, Reconcile: true})
+	d := open(t, src, refset.Options{Clock: clock, PollInterval: 24 * time.Hour, ReloadInterval: reloadEvery, Reconcile: true, Logger: log})
 	eventually(t, "poll and reload timers armed", func() bool { return clock.Timers() == 2 })
 	reload := func() {
 		t.Helper()
@@ -125,4 +133,89 @@ func TestReconcileNeedsReloadInterval(t *testing.T) {
 	if _, err := refset.Open(context.Background(), newSrc(), refset.Options{Reconcile: true}); err == nil {
 		t.Fatal("Reconcile without ReloadInterval should be rejected")
 	}
+}
+
+type plan struct {
+	Name  string
+	Price int
+}
+
+// freshPointers loads its snapshot as new pointers to copies of the data,
+// as a source that decodes rows or messages does.
+type freshPointers struct {
+	*refsettest.MemSource[string, *plan]
+}
+
+func (f freshPointers) LoadSnapshot(ctx context.Context, add func(string, *plan)) (uint64, error) {
+	return f.MemSource.LoadSnapshot(ctx, func(k string, v *plan) {
+		c := *v
+		add(k, &c)
+	})
+}
+
+// Pointer values without an Equal: every reload returns new pointers to the
+// same data, which must not count as divergences (== on the pointers would
+// count every entry), and Open warns that Reconcile relies on DeepEqual.
+func TestReconcilePointerValues(t *testing.T) {
+	mem := refsettest.NewMemSource[string, *plan]("plans")
+	mem.Upsert("basic", &plan{"Basic", 10})
+	mem.Upsert("pro", &plan{"Pro", 30})
+	var logs syncBuffer
+	d, reload := reconcileFixtureLog(t, refset.Source[string, *plan](freshPointers{mem}),
+		slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	if !strings.Contains(logs.String(), "proto.Equal") {
+		t.Errorf("no warning about comparing pointer values at Open; log:\n%s", logs.String())
+	}
+
+	reload()
+	reload()
+	if st := d.Stats(); st.Reconciles != 2 || st.Divergences != 0 {
+		t.Fatalf("unchanged data in new pointers: Reconciles %d, Divergences %d; want 2, 0", st.Reconciles, st.Divergences)
+	}
+
+	// A real unlogged change is still found.
+	state := mem.State()
+	state["pro"] = &plan{"Pro", 35}
+	mem.Restore(mem.Head(), state)
+	reload()
+	if st := d.Stats(); st.Divergences != 1 {
+		t.Fatalf("after an unlogged change: Divergences %d, want 1", st.Divergences)
+	}
+}
+
+// With an Equal, Open doesn't warn.
+func TestReconcileNoWarningWithEqual(t *testing.T) {
+	var logs syncBuffer
+	src := &refset.ReloadSource[string, *plan]{
+		Dataset: "plans",
+		Load: func(context.Context) (uint64, []*plan, error) {
+			return 1, []*plan{{"Basic", 10}}, nil
+		},
+		Key:   func(p *plan) string { return p.Name },
+		Equal: func(a, b *plan) bool { return *a == *b },
+	}
+	reconcileFixtureLog(t, refset.Source[string, *plan](src),
+		slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	if strings.Contains(logs.String(), "Reconcile compares") {
+		t.Errorf("warned although Equal is set; log:\n%s", logs.String())
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for the dataset's loop and the test to
+// use at once.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }

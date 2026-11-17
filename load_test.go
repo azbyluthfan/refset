@@ -264,26 +264,77 @@ func TestReloadDiffNeedsAWayToCompare(t *testing.T) {
 	reload(t, d3)
 }
 
-func TestSafelyComparable(t *testing.T) {
+func TestEqualForComparesContents(t *testing.T) {
 	type inner struct{ A [2]string }
 	type ptr struct{ P *withSlice }
+	type self struct {
+		ID       string
+		Children []self
+	}
 	for _, c := range []struct {
+		name string
 		t    reflect.Type
-		want bool
+		eq   bool // equalFor uses ==
 	}{
-		{reflect.TypeFor[int](), true},
-		{reflect.TypeFor[string](), true},
-		{reflect.TypeFor[inner](), true},
-		{reflect.TypeFor[ptr](), true}, // pointers compare by address
-		{reflect.TypeFor[*withSlice](), true},
-		{reflect.TypeFor[withSlice](), false},
-		{reflect.TypeFor[withIface](), false},
-		{reflect.TypeFor[any](), false},
-		{reflect.TypeFor[[1]any](), false},
-		{reflect.TypeFor[[]int](), false},
+		{"int", reflect.TypeFor[int](), true},
+		{"string", reflect.TypeFor[string](), true},
+		{"struct of arrays", reflect.TypeFor[inner](), true},
+		{"[2]float64", reflect.TypeFor[[2]float64](), true},
+		// == compares identity, not contents: two loads never match.
+		{"pointer", reflect.TypeFor[*withSlice](), false},
+		{"struct holding a pointer", reflect.TypeFor[ptr](), false},
+		{"channel", reflect.TypeFor[chan int](), false},
+		// == undefined, or may panic.
+		{"struct holding a slice", reflect.TypeFor[withSlice](), false},
+		{"struct holding an interface", reflect.TypeFor[withIface](), false},
+		{"any", reflect.TypeFor[any](), false},
+		{"[1]any", reflect.TypeFor[[1]any](), false},
+		{"[]int", reflect.TypeFor[[]int](), false},
+		{"self-referencing through a slice", reflect.TypeFor[self](), false},
 	} {
-		if got := safelyComparable(c.t); got != c.want {
-			t.Errorf("%v: got %v, want %v", c.t, got, c.want)
+		if got := !holdsKind(c.t, isReference); got != c.eq {
+			t.Errorf("%s: uses == %v, want %v", c.name, got, c.eq)
 		}
+	}
+	// The self-referencing type terminates, and holds no pointer.
+	if holdsKind(reflect.TypeFor[self](), isIndirect) {
+		t.Error("self holds no pointer or interface")
+	}
+	if !holdsKind(reflect.TypeFor[map[string][]*withSlice](), isIndirect) {
+		t.Error("pointers inside a map's slices not found")
+	}
+}
+
+// Pointer values: each load returns new pointers to equal data. == would
+// never match (every reload a full copy, every entry "changed"), so without
+// an Equal diffing is off, and with one unchanged shards are kept.
+func TestReloadDiffPointerValues(t *testing.T) {
+	fresh := func(src *listSource[string, *withSlice]) {
+		src.version++
+		for i, e := range src.entries {
+			c := *e.Value
+			src.entries[i].Value = &c
+		}
+	}
+	entries := func() []Op[string, *withSlice] {
+		return []Op[string, *withSlice]{{Key: "a", Value: &withSlice{"a", []string{"x"}}}, {Key: "b", Value: &withSlice{"b", nil}}}
+	}
+
+	s1 := &listSource[string, *withSlice]{version: 1, entries: entries()}
+	d1 := openList(t, s1, 4)
+	if d1.eq != nil {
+		t.Fatal("== used for pointer values")
+	}
+	fresh(s1)
+	if _, _, st := reload(t, d1); st.shardsKept != 0 {
+		t.Fatalf("no Equal: kept %d shards", st.shardsKept)
+	}
+
+	s2 := &listSource[string, *withSlice]{version: 1, entries: entries(),
+		eq: func(a, b *withSlice) bool { return a.ID == b.ID && slices.Equal(a.Tags, b.Tags) }}
+	d2 := openList(t, s2, 4)
+	fresh(s2)
+	if _, _, st := reload(t, d2); st.shardsKept != 4 {
+		t.Fatalf("with Equal: kept %d of 4 shards", st.shardsKept)
 	}
 }

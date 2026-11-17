@@ -8,7 +8,7 @@ How refset uses memory and CPU caches, what that means for your data, and the ru
 - Large datasets are bound by main memory: at 1M entries a random read costs ~135 ns on one core.
 - Keep values small, or store pointers to large ones.
 - The shard count follows the dataset's size; leave `Options.Shards` at 0 unless you have measured a reason.
-- A reload that changes little needs little extra memory when values can be compared (`==`, or `ReloadSource.Equal`). Otherwise the dataset must fit in memory twice, because a reload builds a new copy before swapping.
+- A reload that changes little needs little extra memory when values can be compared (`==` on values without pointers, slices or maps, or `ReloadSource.Equal`). Otherwise the dataset must fit in memory twice, because a reload builds a new copy before swapping.
 - In a container, set `GOMEMLIMIT` to about 90% of the limit and size the container at 2× the process's steady Go memory or more; at 1.25× the GC runs several times more often ([details](#tuning-the-gc-for-a-large-dataset)).
 
 ## How the CPU caches your data
@@ -59,7 +59,7 @@ Measured up to 10M flat entries and 1M nested values ([benchmarks](benchmarks.md
 - **Memory is the limit, not refset.** Plan for the dataset (about 100–125 B per entry for a string key and a small value, much more for nested values), the source's own copy if it keeps one, a reload peak of about 1.1× with comparable values (2× without), and Go's heap headroom (`GOGC`). Swapping makes every read and collection slow; size `GOMEMLIMIT` and the container well inside physical memory.
 - **Large heaps make each collection expensive but rare.** At 10M entries (1.5 GB of heap) a collection took ~0.4–0.5 s of CPU, once every ~14 s. That is cheap per second with the default `GOGC`, but a tight `GOMEMLIMIT` makes collections frequent and each one still costs that much.
 - **Nested values:** store a pointer (`*V`), so `Get` copies 8 bytes instead of the whole struct (a 104-byte value read 2.3–3.8× slower). Treat what it points to as read-only; it is shared by every reader.
-- **Nested values with `ReloadSource`:** they can't be compared with `==`, so each reload rebuilds everything unless you set `ReloadSource.Equal`. With `Equal`, a reload that changes little allocates far less and peaks near 1.1× memory, but compares every value, which took 2.7× longer at 1M entries. Set it when memory or GC matters more than reload time. For large, often-changing nested data, a `Source` with per-key changes avoids full reloads altogether.
+- **Nested values and pointers with `ReloadSource`:** `==` can't compare nested values, and compares pointers by address, so each reload rebuilds everything unless you set `ReloadSource.Equal` (`proto.Equal` for protobuf messages). With `Equal`, a reload that changes little allocates far less and peaks near 1.1× memory, but compares every value, which took 2.7× longer at 1M entries. Set it when memory or GC matters more than reload time. For large, often-changing nested data, a `Source` with per-key changes avoids full reloads altogether.
 
 ## Choosing `Options.Shards`
 

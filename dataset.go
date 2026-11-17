@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -106,6 +107,10 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 		loopDone: make(chan struct{}),
 	}
 	d.log = cfg.log.With("dataset", d.name)
+	if cfg.reconcile && d.eq == nil && holdsKind(reflect.TypeFor[V](), isIndirect) {
+		d.log.Warn("refset: Reconcile compares values that hold pointers with reflect.DeepEqual, which also compares unexported internal state; " +
+			"for values such as protobuf messages, set ReloadSource.Equal (proto.Equal) or Reconcile may report divergences that aren't there")
+	}
 	if kl, ok := caps.(KeyLoader[K, V]); ok {
 		d.loader = kl
 	}
