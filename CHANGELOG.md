@@ -23,6 +23,7 @@ Starting without the source: `OpenBackground` lets a service start while its sou
   - `SnapshotFile.Save` refuses to overwrite the file with the empty snapshot.
 
   Wait a bounded time on the new **`Dataset.Ready()`** so a normal start is fully loaded. **`Stats().Loaded`** reports whether the first load is in.
+- `examples/startup`: start while the source's bulk endpoint is down, serve through a `KeyLoader` added to a `ReloadSource`, and switch to local reads once the background load succeeds. The `ReloadSource` docs show how to add a `KeyLoader` by embedding.
 
 ### Removed
 

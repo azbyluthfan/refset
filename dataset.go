@@ -117,7 +117,8 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 //   - Get returns the zero value and false for every key, and Snapshot is
 //     empty. Check Ready or Loaded first, or use the reads below.
 //   - GetForRequest and GetAtLeast don't wait: they call the source's
-//     KeyLoader, or return ErrNotLoaded if it has none.
+//     KeyLoader, or return ErrNotLoaded if it has none. A ReloadSource gets
+//     one by embedding (see ReloadSource).
 //   - GetFresh returns an error wrapping both ErrTooStale and ErrNotLoaded.
 //   - SnapshotFile.Save refuses the empty snapshot, so it can't replace a
 //     good file.
