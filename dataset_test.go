@@ -467,14 +467,3 @@ func TestHistoryResetReloads(t *testing.T) {
 		t.Fatal("the reset wasn't counted as a reload")
 	}
 }
-
-// GetCtx is kept for one release as a deprecated alias of GetForRequest.
-func TestGetCtxStillWorks(t *testing.T) {
-	src := newSrc()
-	v := src.Upsert("u1", 1)
-	d := open(t, src, quiet(refset.Options{}))
-	ctx := refset.ContextWithMinVersion(context.Background(), d.Name(), v)
-	if got, ok, err := d.GetCtx(ctx, "u1"); err != nil || !ok || got != 1 {
-		t.Fatalf("GetCtx = %d %v %v", got, ok, err)
-	}
-}
