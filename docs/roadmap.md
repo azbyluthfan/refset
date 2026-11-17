@@ -19,7 +19,7 @@ Nothing here is a promise of dates. Items move up when users ask for them; open 
 | `refsetexpvar`, `GetForRequest`, runnable examples | Done |
 | **v0.3.0**: correctness, operations, security and platforms (the four rows above) | Released 2026-11-14 ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.3.0)) |
 | **v0.3.1**: pointer values compared by content, not address | Released 2026-11-17 ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.3.1)) |
-| **v0.4.0**: `OpenBackground` (starting while the source is down); `GetCtx` removed | **Releasing** ([CHANGELOG](../CHANGELOG.md)) |
+| **v0.4.0**: `OpenBackground` (starting while the source is down); `GetCtx` removed | Released 2026-11-17 ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.4.0)) |
 | **Next** | The rest of P3 (real-Postgres measurement, dedicated-machine benchmarks, suspend tests), change notification, `Options.Equal` for custom sources, ecosystem items on demand |
 
 ## Performance track
