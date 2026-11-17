@@ -181,17 +181,19 @@ func TestRevocationFailsClosedWhenPartitioned(t *testing.T) {
 		}
 		return ok, err
 	}
+	// Fake timers only fire on Advance, so wait until each loop has armed its
+	// poll ticker before moving the clock. A loop re-arms it only after a
+	// poll has finished, so this also waits for a poll's results (Polls is
+	// counted when a poll starts; the confirmed time is stored when it ends).
+	timers := func(n int) {
+		eventually(t, "timers armed", func() bool { return clock.Timers() == n })
+	}
 	polls := func() uint64 { return cl.ds[a].Stats().Polls + cl.ds[c].Stats().Polls }
 	advance := func(d time.Duration) {
 		before := polls()
 		clock.Advance(d)
 		eventually(t, "healthy replicas poll", func() bool { return polls() >= before+2 })
-	}
-
-	// Fake timers only fire on Advance, so wait until each loop has armed its
-	// poll ticker before moving the clock.
-	timers := func(n int) {
-		eventually(t, "timers armed", func() bool { return clock.Timers() == n })
+		timers(3) // and finish polling
 	}
 	timers(3)
 	cl.reps[b].SetPartitioned(true)
@@ -233,6 +235,7 @@ func TestRevocationFailsClosedWhenPartitioned(t *testing.T) {
 	clock.Advance(time.Second)
 	eventually(t, "B polls after healing", func() bool { return cl.ds[b].Stats().Polls > before })
 	eventually(t, "B applies the revocation", func() bool { v, _ := cl.ds[b].Get(user); return !v })
+	timers(3) // B's poll has finished, confirmed time included
 	if ok, err := allowed(cl.ds[b]); ok || err != nil {
 		t.Fatalf("B after healing: allowed=%v err=%v", ok, err)
 	}
