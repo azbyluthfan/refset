@@ -67,3 +67,4 @@ jobs:
           go run ./httpjson
           go run ./dbrows
           go run ./restart
+          go run ./startup

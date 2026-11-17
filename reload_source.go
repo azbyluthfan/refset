@@ -32,6 +32,18 @@ import (
 //     it on every change, in the same transaction or under the same lock as
 //     the change itself. Read it from the primary copy of your data, never
 //     from a lagging replica or cache, or read-your-writes breaks.
+//
+// To give it a per-key fallback (a [KeyLoader], used when a read times out or
+// before an [OpenBackground] dataset is loaded), embed it in your own type
+// with a LoadKey method:
+//
+//	type subscriptions struct {
+//		*refset.ReloadSource[string, Subscription]
+//	}
+//
+//	func (s subscriptions) LoadKey(ctx context.Context, id string) (Subscription, bool, error) {
+//		return client.GetSubscription(ctx, id) // the per-request call
+//	}
 type ReloadSource[K comparable, V any] struct {
 	// Dataset is the dataset's name, shared with writers and version headers.
 	Dataset string
