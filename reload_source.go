@@ -56,10 +56,14 @@ type ReloadSource[K comparable, V any] struct {
 	// Equal, if set, reports whether two values are the same. A reload keeps
 	// the shards whose values are all unchanged instead of rebuilding them, so
 	// a reload that changes few values allocates little and needs little more
-	// memory than the current version. Optional: when V is comparable with ==
-	// (and holds no interfaces), == is used without it. Set it for values
-	// that can't be compared with ==, such as structs with slices or maps. A
-	// value Equal reports as unchanged keeps its previous copy.
+	// memory than the current version. Options.Reconcile uses it too.
+	//
+	// Optional: when V holds no pointers, interfaces, channels, slices, maps
+	// or funcs (numbers, strings, and arrays and structs of them), == is used
+	// without it. Set it for anything else: structs with slices or maps, and
+	// pointers, which == compares by address, so two loads of the same data
+	// never match. For protobuf messages, use proto.Equal. A value Equal
+	// reports as unchanged keeps its previous copy.
 	Equal func(a, b V) bool
 }
 

@@ -221,38 +221,68 @@ func newRoot[K comparable, V any](version uint64, l layout, shards []map[K]V) *r
 
 // equalFor returns how a reload compares values to keep unchanged shards:
 // the source's own function if it offers one (ReloadSource.Equal), else ==
-// when V is comparable and contains no interface (== on an interface holding
-// an uncomparable value panics), else nil, which turns diffing off.
+// when == compares V's contents, else nil, which turns diffing off.
+//
+// == compares contents only when V holds no references. On a pointer or a
+// channel it compares identity, so two loads of the same data never match;
+// on an interface it compares what the interface points to, and panics if
+// that is uncomparable; slices, maps and funcs have no ==.
 func equalFor[K comparable, V any](src Source[K, V]) func(a, b V) bool {
 	if s, ok := src.(interface{ equalFunc() func(a, b V) bool }); ok {
 		if f := s.equalFunc(); f != nil {
 			return f
 		}
 	}
-	if !safelyComparable(reflect.TypeFor[V]()) {
+	if holdsKind(reflect.TypeFor[V](), isReference) {
 		return nil
 	}
 	// The conversions don't escape, so this doesn't allocate.
 	return func(a, b V) bool { return any(a) == any(b) }
 }
 
-// safelyComparable reports whether == on values of t is defined and can't
-// panic.
-func safelyComparable(t reflect.Type) bool {
-	if !t.Comparable() {
+func isReference(k reflect.Kind) bool {
+	switch k {
+	case reflect.Pointer, reflect.UnsafePointer, reflect.Interface, reflect.Chan,
+		reflect.Slice, reflect.Map, reflect.Func:
+		return true
+	}
+	return false
+}
+
+// isIndirect matches the kinds whose comparison by reflect.DeepEqual can
+// depend on state other than the visible data: a pointer may reach
+// unexported internal fields (a protobuf message's), and an interface may
+// hold anything.
+func isIndirect(k reflect.Kind) bool {
+	return k == reflect.Pointer || k == reflect.UnsafePointer || k == reflect.Interface
+}
+
+// holdsKind reports whether t, or a type its values contain (array, slice
+// and map elements, map keys, struct fields, but not what pointers point
+// to), has a kind that match accepts.
+func holdsKind(t reflect.Type, match func(reflect.Kind) bool) bool {
+	return holdsKindSeen(t, match, make(map[reflect.Type]bool))
+}
+
+func holdsKindSeen(t reflect.Type, match func(reflect.Kind) bool, seen map[reflect.Type]bool) bool {
+	if match(t.Kind()) {
+		return true
+	}
+	if seen[t] { // a type that contains itself through a slice or map
 		return false
 	}
+	seen[t] = true
 	switch t.Kind() {
-	case reflect.Interface:
-		return false
-	case reflect.Array:
-		return safelyComparable(t.Elem())
+	case reflect.Array, reflect.Slice:
+		return holdsKindSeen(t.Elem(), match, seen)
+	case reflect.Map:
+		return holdsKindSeen(t.Key(), match, seen) || holdsKindSeen(t.Elem(), match, seen)
 	case reflect.Struct:
 		for i := range t.NumField() {
-			if !safelyComparable(t.Field(i).Type) {
-				return false
+			if holdsKindSeen(t.Field(i).Type, match, seen) {
+				return true
 			}
 		}
 	}
-	return true
+	return false
 }

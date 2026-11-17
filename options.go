@@ -61,6 +61,13 @@ type Options struct {
 	// warning (the count, not the keys); the reloaded data is installed
 	// either way. Costs one comparison of the dataset per interval, less
 	// when the reload kept unchanged shards. Needs ReloadInterval.
+	//
+	// Values are compared with ReloadSource.Equal if set, else with == when
+	// it compares contents (see ReloadSource.Equal), else with
+	// reflect.DeepEqual. DeepEqual also compares unexported internal state,
+	// which can make values such as protobuf messages differ when their data
+	// doesn't; set Equal for them (proto.Equal). Open logs a warning when
+	// values hold pointers and no Equal is set.
 	Reconcile bool
 
 	// Clock supplies time. nil means the system clocks.

@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pointer values are no longer compared by address.** Without `ReloadSource.Equal`, reloads compared values with `==` whenever the type allowed it, which for pointers (and structs holding them) compares addresses. A source that decodes its data returns new pointers on every load, so for it:
+  - diffed reloads never kept a shard: every reload was a full copy;
+  - `Options.Reconcile` counted every entry as a divergence on every periodic reload.
+
+  `==` is now used only for values that hold no pointers, interfaces, channels, slices, maps or funcs, and `Reconcile` falls back to `reflect.DeepEqual` for the rest. Set `ReloadSource.Equal` to keep diffed reloads for pointer values; for protobuf messages use `proto.Equal`. `Open` warns when `Reconcile` is on, values hold pointers and no `Equal` is set.
+
 ## [0.3.0] - 2026-11-14
 
 Correctness, operations and security release: a reconcile check that catches changes a source's feed missed, a snapshot file for fast restarts, recovery from panics in source code, limits that keep a slow or flooded source from piling up work, and CI on Linux ARM64, Windows, macOS, 32-bit, s390x and WebAssembly. Reads are unchanged. No API was removed.
