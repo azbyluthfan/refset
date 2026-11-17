@@ -640,7 +640,7 @@ Every push and pull request: lint (golangci-lint with gosec, the zero-requires c
 
 ## 9. Roadmap
 
-Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of latency, GC and memory (`bench/perfreport`); automatic shard sizing, an adaptive batch window, and pre-sized, diffed reloads (v0.2); the reconcile check, `SnapshotFile`, panic recovery, the fallback cap, rate-limited forged-version polls, the `GOMEMLIMIT` rule and platform coverage (v0.3). Investigated and not adopted: a single-hash shard table and pointer-free storage. Open: measuring real-source costs with Postgres, dedicated-machine benchmarks, real suspend tests, change notification, and the ecosystem items (metrics adapters, more example sources, gRPC helpers, promoting `pgsource` to `refsetpg`) when there is demand.
+Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of latency, GC and memory (`bench/perfreport`); automatic shard sizing, an adaptive batch window, and pre-sized, diffed reloads (v0.2); the reconcile check, `SnapshotFile`, panic recovery, the fallback cap, rate-limited forged-version polls, the `GOMEMLIMIT` rule and platform coverage (v0.3); comparing pointer values by content (v0.3.1); `OpenBackground` for starting while the source is down (v0.4). Investigated and not adopted: a single-hash shard table and pointer-free storage. Open: measuring real-source costs with Postgres, dedicated-machine benchmarks, real suspend tests, change notification, `Options.Equal` for custom sources, and the ecosystem items (metrics adapters, more example sources, gRPC helpers, promoting `pgsource` to `refsetpg`) when there is demand.
 
 ## 10. Risks and Open Questions
 

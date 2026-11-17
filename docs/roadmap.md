@@ -4,7 +4,7 @@ Where refset is going after the first release. The reasoning behind the design i
 
 Nothing here is a promise of dates. Items move up when users ask for them; open an issue if one matters to you.
 
-## Where things stand (2026-11-14)
+## Where things stand (2026-11-17)
 
 | Area | State |
 |---|---|
@@ -18,7 +18,9 @@ Nothing here is a promise of dates. Items move up when users ask for them; open 
 | Platforms (P3b): Linux x86-64 and ARM64, Windows, macOS, 32-bit, big-endian, WebAssembly, 1–2 CPUs in CI | Done |
 | `refsetexpvar`, `GetForRequest`, runnable examples | Done |
 | **v0.3.0**: correctness, operations, security and platforms (the four rows above) | Released 2026-11-14 ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.3.0)) |
-| **Next** | The rest of P3 (real-Postgres measurement, dedicated-machine benchmarks, suspend tests), change notification, ecosystem items on demand |
+| **v0.3.1**: pointer values compared by content, not address | Released 2026-11-17 ([release](https://github.com/azbyluthfan/refset/releases/tag/v0.3.1)) |
+| **v0.4.0**: `OpenBackground` (starting while the source is down); `GetCtx` removed | **Releasing** ([CHANGELOG](../CHANGELOG.md)) |
+| **Next** | The rest of P3 (real-Postgres measurement, dedicated-machine benchmarks, suspend tests), change notification, `Options.Equal` for custom sources, ecosystem items on demand |
 
 ## Performance track
 
@@ -129,6 +131,8 @@ Questions the docs make claims about without having tested them, or where real d
   - ~~Key-mapping triggers for joined tables~~ **Done (v0.3.0):** `InstallKeyMappingTrigger` runs an application query over a joined table's changed rows and logs only the affected dataset keys, in immediate or deferred mode, instead of reloading the whole dataset.
   - **Fixed:** triggers were named after their table only, so a second dataset with triggers on the same table silently replaced the first's. Names now include the dataset, and reinstalling removes that dataset's old-named triggers.
   - ~~Snapshot loading from a read replica~~ **Done (v0.3.0):** `Table.SnapshotPool` reads full snapshots on a replica when catching up from its version will work, and on the primary otherwise. Checked against a real hot standby with replay paused.
+- ~~**Pointer and protobuf values without `Equal`**~~ **Fixed (v0.3.1):** reloads compared pointer values with `==`, by address, so a source that decodes its data made every reload a full copy and `Reconcile` report every entry as a divergence. `==` is now used only for values without pointers, interfaces, slices or maps, and `Reconcile` falls back to `reflect.DeepEqual`. `Open` warns when `Reconcile` has values holding pointers and no `Equal`. Still open: only `ReloadSource` can provide an `Equal`; an `Options.Equal` would let custom sources keep diffed reloads for pointer values.
+- ~~**Starting when the source is down**~~ **Done (v0.4.0):** `OpenBackground` returns at once and loads in the background, retrying from 1 to 30 seconds. Until the first load, `Ready()` stays open, version-aware reads go to the `KeyLoader` or return `ErrNotLoaded`, `GetFresh` fails closed, and `SnapshotFile.Save` refuses the empty snapshot. Waiting a bounded time on `Ready()` keeps a normal start fully loaded, so only an outage falls back. The not-loaded check costs nothing measurable on the request path.
 
 ## Change notification (proposed)
 
