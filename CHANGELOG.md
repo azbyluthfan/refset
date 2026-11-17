@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-17
+
+Fixes reloads of pointer values: they were compared by address, so every reload was a full copy and `Options.Reconcile` reported every entry as a divergence. No API change.
+
 ### Fixed
 
 - **Pointer values are no longer compared by address.** Without `ReloadSource.Equal`, reloads compared values with `==` whenever the type allowed it, which for pointers (and structs holding them) compares addresses. A source that decodes its data returns new pointers on every load, so for it:
