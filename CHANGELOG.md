@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **`OpenBackground`**: starts a dataset without waiting for its source, for services that would rather start while the source is down than fail. It returns at once and loads in the background, retrying failed loads at intervals growing from 1 to 30 seconds. It starts from a usable `SnapshotFile` like `Open`. Until the first load:
+  - `GetAtLeast` and `GetForRequest` call the `KeyLoader`, or return the new `ErrNotLoaded`;
+  - `GetFresh` fails with `ErrTooStale` and `ErrNotLoaded`;
+  - `Get` finds nothing;
+  - `SnapshotFile.Save` refuses to overwrite the file with the empty snapshot.
+
+  Wait a bounded time on the new **`Dataset.Ready()`** so a normal start is fully loaded. **`Stats().Loaded`** reports whether the first load is in.
+
 ## [0.3.1] - 2026-11-17
 
 Fixes reloads of pointer values: they were compared by address, so every reload was a full copy and `Options.Reconcile` reported every entry as a divergence. No API change.

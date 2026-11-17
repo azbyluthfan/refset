@@ -96,7 +96,13 @@ type snapshotEntry[K comparable, V any] struct {
 // Save writes s to Path atomically: to a temporary file in the same
 // directory, flushed to disk, then renamed over Path. Snapshots are immutable,
 // so Save can run while the dataset keeps changing.
+//
+// Save refuses the empty snapshot of a dataset OpenBackground hasn't loaded
+// yet, with ErrNotLoaded, so it can't replace a good file.
 func (f *SnapshotFile[K, V]) Save(s Snapshot[K, V]) error {
+	if s.r != nil && s.r.pending {
+		return fmt.Errorf("refset: SnapshotFile save: %w", ErrNotLoaded)
+	}
 	if err := gobSafe(reflect.TypeFor[K]()); err != nil {
 		return fmt.Errorf("refset: SnapshotFile key type: %w", err)
 	}

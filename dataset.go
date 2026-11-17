@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math/rand/v2"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -45,6 +46,7 @@ type Dataset[K comparable, V any] struct {
 	flights  *flights[K, V]
 	ctx      context.Context
 	cancel   context.CancelFunc
+	ready    chan struct{} // closed when the first version is installed
 	loopDone chan struct{}
 	_        cacheLinePad
 
@@ -81,7 +83,76 @@ type Dataset[K comparable, V any] struct {
 // served from a partial or empty dataset. If the snapshot cannot be loaded
 // before ctx ends, Open returns an error. ctx bounds only the initial load;
 // call Close to stop the dataset.
+//
+// To start without waiting for the source, see OpenBackground.
 func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Options) (*Dataset[K, V], error) {
+	d, err := newDataset(src, opts)
+	if err != nil {
+		return nil, err
+	}
+	start := d.cfg.clock.Now()
+	r, fromFile, err := d.openLoad(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("refset: open dataset %q: %w", d.name, err)
+	}
+	d.install(r, fromFile, start)
+	d.ctx, d.cancel = context.WithCancel(context.Background()) //nolint:gosec // cancel is kept in d.cancel and called by Close
+	d.run(fromFile)
+	return d, nil
+}
+
+// OpenBackground returns a dataset at once and loads it in the background,
+// for applications that would rather start while the source is unreachable
+// than wait for it. It fails only on invalid arguments.
+//
+// If src is a SnapshotFile with a usable file, the dataset starts from it,
+// as Open does, and is loaded at once. Otherwise the dataset is empty until
+// its first full load succeeds. Failed loads are retried, at growing
+// intervals from 1 second to 30 seconds, until one succeeds or the dataset
+// is closed; each failure counts in Stats().PollErrors and is logged.
+//
+// Until it is loaded:
+//
+//   - Ready's channel is open, and Stats().Loaded is false.
+//   - Get returns the zero value and false for every key, and Snapshot is
+//     empty. Check Ready or Loaded first, or use the reads below.
+//   - GetForRequest and GetAtLeast don't wait: they call the source's
+//     KeyLoader, or return ErrNotLoaded if it has none.
+//   - GetFresh returns an error wrapping both ErrTooStale and ErrNotLoaded.
+//   - SnapshotFile.Save refuses the empty snapshot, so it can't replace a
+//     good file.
+//
+// To wait a bounded time for the first load, so a normal start serves
+// local data from its first request, select on Ready with a timer:
+//
+//	d, err := refset.OpenBackground(src, opts)
+//	if err != nil {
+//		return err
+//	}
+//	select {
+//	case <-d.Ready():
+//	case <-time.After(5 * time.Second): // carry on; lookups use the KeyLoader
+//	}
+func OpenBackground[K comparable, V any](src Source[K, V], opts Options) (*Dataset[K, V], error) {
+	d, err := newDataset(src, opts)
+	if err != nil {
+		return nil, err
+	}
+	start := d.cfg.clock.Now()
+	d.ctx, d.cancel = context.WithCancel(context.Background()) //nolint:gosec // cancel is kept in d.cancel and called by Close
+	if r := d.safeLoadFromFile(d.ctx); r != nil {
+		d.install(r, true, start)
+		d.run(true)
+		return d, nil
+	}
+	d.root.Store(&root[K, V]{l: d.base, shards: emptyShards[K, V](1), pending: true})
+	never := Reading{MonoNanos: start.MonoNanos - 1<<62, WallNanos: 0}
+	d.lastConfirmed.Store(&never)
+	go d.loadInBackground()
+	return d, nil
+}
+
+func newDataset[K comparable, V any](src Source[K, V], opts Options) (*Dataset[K, V], error) {
 	if src == nil {
 		return nil, errors.New("refset: Open with nil Source")
 	}
@@ -104,6 +175,7 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 		kick:     make(chan struct{}, 1),
 		kickNew:  make(chan struct{}, 1),
 		flights:  newFlights[K, V](cfg.maxFallbacks),
+		ready:    make(chan struct{}),
 		loopDone: make(chan struct{}),
 	}
 	d.log = cfg.log.With("dataset", d.name)
@@ -114,11 +186,11 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 	if kl, ok := caps.(KeyLoader[K, V]); ok {
 		d.loader = kl
 	}
-	start := cfg.clock.Now()
-	r, fromFile, err := d.openLoad(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("refset: open dataset %q: %w", d.name, err)
-	}
+	return d, nil
+}
+
+// install serves r, the dataset's first version, loaded at start.
+func (d *Dataset[K, V]) install(r *root[K, V], fromFile bool, start Reading) {
 	d.root.Store(r)
 	d.knownHead.Store(r.version)
 	if fromFile {
@@ -131,18 +203,72 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 		d.lastConfirmed.Store(&start)
 	}
 	d.lastApply.Store(start.WallNanos)
+	close(d.ready)
+}
 
-	d.ctx, d.cancel = context.WithCancel(context.Background()) //nolint:gosec // cancel is kept in d.cancel and called by Close
+// run starts the background loop on a loaded dataset. catchUp polls the
+// source at once, for data that came from a snapshot file.
+func (d *Dataset[K, V]) run(catchUp bool) {
 	watch, err := d.watch()
 	if err != nil {
 		d.log.Warn("refset: watch unavailable; relying on polling", "err", err)
 		watch = nil
 	}
 	go d.loop(watch)
-	if fromFile {
+	if catchUp {
 		d.kick <- struct{}{} // catch up with the source at once
 	}
-	return d, nil
+}
+
+// Background load retry intervals (OpenBackground).
+const (
+	firstRetryMin = time.Second
+	firstRetryMax = 30 * time.Second
+)
+
+// loadInBackground is OpenBackground's first load: it retries until a full
+// load succeeds or the dataset is closed, then runs the loop.
+func (d *Dataset[K, V]) loadInBackground() {
+	delay := firstRetryMin
+	for attempt := 1; ; attempt++ {
+		d.mu.Lock()
+		d.pollsStarted++
+		seq := d.pollsStarted
+		d.mu.Unlock()
+		start := d.cfg.clock.Now()
+		d.polls.Add(1)
+		r, err := d.firstLoad(d.ctx)
+		if err == nil {
+			d.install(r, false, start)
+			d.finish(seq, r.version, true)
+			d.log.Info("refset: loaded in the background", "version", r.version, "entries", r.n, "attempts", attempt)
+			d.run(false)
+			return
+		}
+		if d.ctx.Err() != nil {
+			close(d.loopDone)
+			return
+		}
+		d.pollErrors.Add(1)
+		wait := jitter(delay)
+		d.log.Warn("refset: background load failed; serving nothing locally until it succeeds",
+			"attempt", attempt, "retry_in", wait, "err", err)
+		t := d.cfg.clock.NewTimer(wait)
+		select {
+		case <-d.ctx.Done():
+			t.Stop()
+			close(d.loopDone)
+			return
+		case <-t.C():
+		}
+		delay = min(2*delay, firstRetryMax)
+	}
+}
+
+// jitter spreads d by ±20%, so replicas that failed together don't all
+// retry against a recovering source at the same moment.
+func jitter(d time.Duration) time.Duration {
+	return d + time.Duration((rand.Float64()*0.4-0.2)*float64(d)) //nolint:gosec // timing jitter, not security
 }
 
 // openLoad is Open's first load, from the snapshot file or the source, with a
@@ -159,6 +285,34 @@ func (d *Dataset[K, V]) openLoad(ctx context.Context) (r *root[K, V], fromFile b
 	}
 	r, _, err = d.load(ctx, nil)
 	return r, false, err
+}
+
+// firstLoad is a full load from the source with a panic returned as a
+// *PanicError.
+func (d *Dataset[K, V]) firstLoad(ctx context.Context) (r *root[K, V], err error) {
+	defer func() {
+		if p := recovered(recover()); p != nil {
+			d.panics.Add(1)
+			d.log.Error("refset: panic in source code during the background load",
+				"panic", p.Value, "stack", string(p.Stack))
+			r, err = nil, p
+		}
+	}()
+	r, _, err = d.load(ctx, nil)
+	return r, err
+}
+
+// safeLoadFromFile is loadFromFile with a panic treated as an unusable file.
+func (d *Dataset[K, V]) safeLoadFromFile(ctx context.Context) (r *root[K, V]) {
+	defer func() {
+		if p := recovered(recover()); p != nil {
+			d.panics.Add(1)
+			d.log.Warn("refset: snapshot file not used; loading from the source", "err", p)
+			r = nil
+		}
+	}()
+	r, _ = d.loadFromFile(ctx)
+	return r
 }
 
 // watch calls Source.Watch, with a panic returned as a *PanicError.
@@ -210,8 +364,24 @@ func (d *Dataset[K, V]) Snapshot() Snapshot[K, V] {
 
 // Get returns the value for key from the current version. It never waits and
 // never fails; use GetAtLeast, GetForRequest or GetFresh when freshness matters.
+// Before an OpenBackground dataset is loaded, it finds nothing.
 func (d *Dataset[K, V]) Get(key K) (V, bool) {
 	return d.root.Load().get(key)
+}
+
+// Ready returns a channel that is closed once the dataset has data to serve:
+// before Open returns, or when OpenBackground's first load (or snapshot file)
+// is in. It stays open if the dataset is closed before that.
+func (d *Dataset[K, V]) Ready() <-chan struct{} { return d.ready }
+
+// notLoaded answers a version-aware read before OpenBackground's first load:
+// from the KeyLoader if there is one, without waiting for the load.
+func (d *Dataset[K, V]) notLoaded(ctx context.Context, key K) (V, bool, error) {
+	if d.loader == nil {
+		var zero V
+		return zero, false, ErrNotLoaded
+	}
+	return d.fallback(ctx, key)
 }
 
 // GetAtLeast returns the value for key at version minVersion or newer.
@@ -223,9 +393,16 @@ func (d *Dataset[K, V]) Get(key K) (V, bool) {
 // ErrNotCaughtUp otherwise. If a poll that started after this call shows the
 // source's head is below minVersion, it returns ErrVersionAhead without a
 // fallback. If ctx ends first, it returns ctx.Err().
+//
+// Before an OpenBackground dataset is loaded, it doesn't wait: it calls the
+// KeyLoader, or returns ErrNotLoaded if there is none.
 func (d *Dataset[K, V]) GetAtLeast(ctx context.Context, key K, minVersion uint64) (V, bool, error) {
-	if d.root.Load().version >= minVersion {
-		v, ok := d.Get(key)
+	r := d.root.Load()
+	if r.pending {
+		return d.notLoaded(ctx, key)
+	}
+	if r.version >= minVersion {
+		v, ok := r.get(key)
 		return v, ok, nil
 	}
 	if d.cfg.waitBound < 0 {
@@ -273,12 +450,17 @@ func (d *Dataset[K, V]) afterWait(key K, err error) (V, bool, error) {
 // version for this dataset carried in ctx (see ContextWithMinVersion, usually
 // set by refsethttp's middleware from the client's version header). With a
 // minimum it behaves like GetAtLeast, waiting for that version; without one,
-// like Get.
+// like Get. Before an OpenBackground dataset is loaded, it calls the
+// KeyLoader, or returns ErrNotLoaded if there is none.
 func (d *Dataset[K, V]) GetForRequest(ctx context.Context, key K) (V, bool, error) {
 	if minVersion, ok := MinVersion(ctx, d.name); ok {
 		return d.GetAtLeast(ctx, key, minVersion)
 	}
-	v, ok := d.Get(key)
+	r := d.root.Load()
+	if r.pending {
+		return d.notLoaded(ctx, key)
+	}
+	v, ok := r.get(key)
 	return v, ok, nil
 }
 
@@ -293,6 +475,9 @@ func (d *Dataset[K, V]) GetCtx(ctx context.Context, key K) (V, bool, error) {
 // current within Options.MaxStaleness and Options.MaxLagVersions; otherwise it
 // returns an error wrapping ErrTooStale. Use it for fail-closed decisions such
 // as permission checks.
+//
+// Before an OpenBackground dataset is loaded, the error wraps both ErrTooStale
+// and ErrNotLoaded.
 //
 // "Current" means caught up with every change the source has reported. A change
 // the source never reported (see the Source contract) cannot be detected.

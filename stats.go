@@ -5,6 +5,7 @@ import "time"
 // Stats describes a dataset's state, for metrics and debugging.
 type Stats struct {
 	Name           string
+	Loaded         bool          // false until OpenBackground's first load
 	AppliedVersion uint64        // version served by Get
 	HeadVersion    uint64        // latest version the source has reported
 	LagVersions    uint64        // HeadVersion - AppliedVersion
@@ -40,6 +41,7 @@ func (d *Dataset[K, V]) Stats() Stats {
 	d.mu.Unlock()
 	return Stats{
 		Name:           d.name,
+		Loaded:         !r.pending,
 		AppliedVersion: r.version,
 		HeadVersion:    max(d.knownHead.Load(), r.version),
 		LagVersions:    d.lag(),

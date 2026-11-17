@@ -1,6 +1,9 @@
 package refset
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var (
 	// ErrNotCaughtUp is returned by a version-aware read when the replica did
@@ -22,7 +25,16 @@ var (
 	// reloads a full snapshot.
 	ErrSnapshotRequired = errors.New("refset: changes unavailable, full snapshot required")
 
+	// ErrNotLoaded is returned by reads of a dataset opened with
+	// OpenBackground before its first load, when there is no KeyLoader to
+	// answer instead. GetFresh's error wraps it too, with ErrTooStale.
+	ErrNotLoaded = errors.New("refset: dataset not loaded yet")
+
 	// ErrClosed is returned by reads that need to wait after the dataset was
 	// closed.
 	ErrClosed = errors.New("refset: dataset closed")
 )
+
+// errNotLoadedStale is GetFresh's error before the first load, made once so
+// the read path doesn't allocate.
+var errNotLoadedStale = fmt.Errorf("%w: %w", ErrTooStale, ErrNotLoaded)

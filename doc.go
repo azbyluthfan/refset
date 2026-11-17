@@ -29,6 +29,10 @@
 //	plan, ok, err = plans.GetAtLeast(ctx, userID, v)  // waits for version v
 //	plan, ok, err = plans.GetFresh(userID)            // fails closed when stale
 //
+// [Open] waits for the first load. To start while the source is down, use
+// [OpenBackground], which loads in the background and, until then, sends
+// version-aware reads to the source's [KeyLoader].
+//
 // For large datasets that change often, implement [Source] with per-key
 // changes. Package refsethttp carries versions between services for
 // read-your-writes, package refsettest checks a Source against the contract

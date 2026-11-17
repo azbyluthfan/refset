@@ -21,6 +21,9 @@ func (d *Dataset[K, V]) lag() uint64 {
 }
 
 func (d *Dataset[K, V]) checkFresh() error {
+	if d.root.Load().pending {
+		return errNotLoadedStale
+	}
 	if d.cfg.maxLag > 0 {
 		if lag := d.lag(); lag > d.cfg.maxLag {
 			return fmt.Errorf("%w: %d versions behind (limit %d)", ErrTooStale, lag, d.cfg.maxLag)

@@ -37,6 +37,29 @@ func Example() {
 	// Output: free true 1
 }
 
+// Start without waiting for the source, but give it a few seconds: a normal
+// start is fully loaded before the first request, and only an outage leaves
+// the dataset empty, with version-aware reads going to the KeyLoader.
+func ExampleOpenBackground() {
+	src := refsettest.NewMemSource[string, Plan](PlansDataset)
+	src.Upsert("user-1", Plan{Tier: "free"})
+
+	plans, err := refset.OpenBackground(src, refset.Options{})
+	if err != nil {
+		panic(err) // invalid options, never an unreachable source
+	}
+	defer func() { _ = plans.Close() }()
+
+	select {
+	case <-plans.Ready():
+	case <-time.After(5 * time.Second):
+		// Serve anyway. GetForRequest uses the KeyLoader until the load is in.
+	}
+	p, ok, err := plans.GetForRequest(context.Background(), "user-1")
+	fmt.Println(p.Tier, ok, err, plans.Stats().Loaded)
+	// Output: free true <nil> true
+}
+
 // Read-your-writes: a writer returns the new version to the client, and the
 // next request asks for at least that version on whichever replica it lands.
 func ExampleDataset_GetAtLeast() {

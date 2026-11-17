@@ -120,6 +120,14 @@ The dataset lives only in process memory, so every process start (first deploy, 
 
 - `Open` calls `LoadSnapshot` and blocks until the full dataset is in memory. Reads are never served from a partial or empty dataset.
 - If the source is unavailable, `Open` returns an error when `ctx` expires. There is no silent start with empty data.
+- Starting while the source is down: `OpenBackground` returns at once and loads in the background, retrying failed loads at intervals growing from 1 to 30 seconds (±20% jitter, so replicas that failed together don't retry together). It starts from a usable `SnapshotFile` like `Open`. Otherwise, until the first load succeeds, the dataset is empty and says so wherever a read can report it:
+  - `Ready()` stays open and `Stats().Loaded` is false;
+  - `GetAtLeast` and `GetForRequest` don't wait: they call the `KeyLoader`, within `MaxConcurrentFallbacks`, or return `ErrNotLoaded`;
+  - `GetFresh` fails with an error wrapping `ErrTooStale` and `ErrNotLoaded`, whatever the staleness settings;
+  - `Get` finds nothing, since it can't report an error; callers check `Ready` first;
+  - `SnapshotFile.Save` refuses the empty snapshot, so it can't replace a good file.
+
+  The usual pattern waits a bounded time on `Ready()`, so a normal start serves local data from its first request and only an outage falls back. The first load counts as a poll in `Stats`, and the watch and periodic reloads start after it.
 - After `Open`, the replica catches up through `Changes` like any other replica. Nothing from before the restart is needed.
 - Operational consequences, documented for users:
   - Startup time grows with dataset size (published in `docs/benchmarks.md`).
@@ -244,6 +252,7 @@ R1 and R2 are enforced in the core today (zero-allocation tests, padded `Dataset
 type Dataset[K comparable, V any] struct { /* ... */ }
 
 func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Options) (*Dataset[K, V], error)
+func OpenBackground[K comparable, V any](src Source[K, V], opts Options) (*Dataset[K, V], error) // §4.4
 
 func (d *Dataset[K, V]) Get(key K) (V, bool)
 func (d *Dataset[K, V]) GetAtLeast(ctx context.Context, key K, minVersion uint64) (V, bool, error)
@@ -253,6 +262,7 @@ func (d *Dataset[K, V]) Snapshot() Snapshot[K, V] // immutable; Version(), Get, 
 func (d *Dataset[K, V]) Version() uint64
 func (d *Dataset[K, V]) Name() string
 func (d *Dataset[K, V]) Stats() Stats
+func (d *Dataset[K, V]) Ready() <-chan struct{} // closed once there is data to serve
 func (d *Dataset[K, V]) Close() error
 
 type Source[K comparable, V any] interface { /* §4.2 */ }
@@ -305,7 +315,7 @@ type PanicError struct {
     Stack []byte
 }
 
-// Stats(): Name, AppliedVersion, HeadVersion, LagVersions, Staleness, Entries, Shards, LastApply,
+// Stats(): Name, Loaded, AppliedVersion, HeadVersion, LagVersions, Staleness, Entries, Shards, LastApply,
 // Waiters, Polls, PollErrors, Reloads, Panics, Fallbacks, Applies, ShardsCopied, EntriesCopied,
 // ShardsKept, Reconciles, Divergences.
 
@@ -314,6 +324,7 @@ var (
     ErrVersionAhead     = errors.New("refset: requested version is beyond the source head")
     ErrTooStale         = errors.New("refset: replica is too stale")
     ErrSnapshotRequired = errors.New("refset: changes unavailable, full snapshot required")
+    ErrNotLoaded        = errors.New("refset: dataset not loaded yet")
     ErrClosed           = errors.New("refset: dataset closed")
 )
 ```
