@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-17
+
+Starting without the source: `OpenBackground` lets a service start while its source is down, serving through its `KeyLoader` until the first load succeeds. Removes `GetCtx`. Reads, changes and reloads perform as in v0.3.1 ([benchmarks](docs/benchmarks.md)).
+
+### Upgrading
+
+- **`GetCtx` is removed.** Rename calls to `GetForRequest`, which behaves the same.
+- **Nothing else changes for code that uses `Open`.** To start while the source is down, switch to `OpenBackground` and wait a few seconds on `Ready()` before serving, so a normal start is fully loaded; see the example on pkg.go.dev.
+- If your values are pointers or protobuf messages, set `ReloadSource.Equal` (`proto.Equal` for protobuf), as noted in v0.3.1.
+
 ### Added
 
 - **`OpenBackground`**: starts a dataset without waiting for its source, for services that would rather start while the source is down than fail. It returns at once and loads in the background, retrying failed loads at intervals growing from 1 to 30 seconds. It starts from a usable `SnapshotFile` like `Open`. Until the first load:
