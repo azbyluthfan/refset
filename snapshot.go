@@ -67,6 +67,7 @@ type root[K comparable, V any] struct {
 	l       layout
 	shards  []map[K]V
 	n       int
+	pending bool // the empty stand-in before OpenBackground's first load
 }
 
 func (r *root[K, V]) get(key K) (V, bool) {
