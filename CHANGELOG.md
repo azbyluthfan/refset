@@ -14,6 +14,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
   Wait a bounded time on the new **`Dataset.Ready()`** so a normal start is fully loaded. **`Stats().Loaded`** reports whether the first load is in.
 
+### Removed
+
+- **`Dataset.GetCtx`**, deprecated in v0.3.0. Use `GetForRequest`, which behaves the same.
+
 ## [0.3.1] - 2026-11-17
 
 Fixes reloads of pointer values: they were compared by address, so every reload was a full copy and `Options.Reconcile` reported every entry as a divergence. No API change.

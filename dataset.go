@@ -464,13 +464,6 @@ func (d *Dataset[K, V]) GetForRequest(ctx context.Context, key K) (V, bool, erro
 	return v, ok, nil
 }
 
-// GetCtx is the old name of GetForRequest.
-//
-// Deprecated: Use GetForRequest. GetCtx will be removed in v0.4.0.
-func (d *Dataset[K, V]) GetCtx(ctx context.Context, key K) (V, bool, error) {
-	return d.GetForRequest(ctx, key)
-}
-
 // GetFresh returns the value for key only if the replica can confirm it is
 // current within Options.MaxStaleness and Options.MaxLagVersions; otherwise it
 // returns an error wrapping ErrTooStale. Use it for fail-closed decisions such

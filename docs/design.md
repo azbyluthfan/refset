@@ -338,7 +338,7 @@ Packages in the library module (all stdlib only):
 - `refset/refsethttp`: header and cookie helpers and middleware.
 - `refset/refsetexpvar`: publishes `Stats` at `/debug/vars` through the standard library's `expvar` (a separate package because importing `expvar` registers that handler).
 
-`Dataset.GetCtx`, the old name of `GetForRequest`, remains as a deprecated alias until v0.4.0.
+`Dataset.GetCtx`, the old name of `GetForRequest`, was removed in v0.4.0.
 
 Outside the library (separate modules, any dependencies): `examples/` (including `pgsource`, `filesource`, the `ReloadSource` examples `structs`, `dbrows`, `httpjson`, and the `restart` example of `SnapshotFile`) and `bench/` (benchmarks and `perfreport`).
 
