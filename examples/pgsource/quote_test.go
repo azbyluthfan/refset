@@ -2,10 +2,12 @@ package pgsource
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 var literalInputs = []string{
@@ -34,7 +36,9 @@ func TestQuoteLiteral(t *testing.T) {
 }
 
 // Postgres must read every quoted literal back as the original string, with
-// standard_conforming_strings on (the default) and off. Needs REFSET_PG_URL.
+// standard_conforming_strings on (the default) and off. Newer Postgres
+// releases refuse to turn it off, which removes the risk quoteLiteral guards
+// against; there only "on" is checked. Needs REFSET_PG_URL.
 func TestQuoteLiteralRoundTripsInPostgres(t *testing.T) {
 	url := os.Getenv("REFSET_PG_URL")
 	if url == "" {
@@ -48,6 +52,11 @@ func TestQuoteLiteralRoundTripsInPostgres(t *testing.T) {
 	defer func() { _ = conn.Close(ctx) }()
 	for _, setting := range []string{"on", "off"} {
 		if _, err := conn.Exec(ctx, "SET standard_conforming_strings = "+setting); err != nil {
+			var pgErr *pgconn.PgError
+			if setting == "off" && errors.As(err, &pgErr) && pgErr.Code == "0A000" { // feature_not_supported
+				t.Logf("this Postgres can't turn standard_conforming_strings off (%v); checked with it on only", err)
+				continue
+			}
 			t.Fatal(err)
 		}
 		for _, in := range literalInputs {
