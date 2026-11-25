@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 )
 
@@ -336,5 +337,61 @@ func TestReloadDiffPointerValues(t *testing.T) {
 	fresh(s2)
 	if _, _, st := reload(t, d2); st.shardsKept != 4 {
 		t.Fatalf("with Equal: kept %d of 4 shards", st.shardsKept)
+	}
+}
+
+// equalerSource is a custom source with an Equal method: the way any Source,
+// not just a ReloadSource, supplies a comparison.
+type equalerSource struct {
+	*listSource[string, *withSlice]
+	calls int
+}
+
+func (s *equalerSource) Equal(a, b *withSlice) bool {
+	s.calls++
+	return a.ID == b.ID && slices.Equal(a.Tags, b.Tags)
+}
+
+func TestReloadDiffUsesSourceEqualMethod(t *testing.T) {
+	inner := &listSource[string, *withSlice]{version: 1, entries: []Op[string, *withSlice]{
+		{Key: "a", Value: &withSlice{"a", []string{"x"}}}, {Key: "b", Value: &withSlice{"b", nil}}}}
+	src := &equalerSource{listSource: inner}
+	d, err := Open(context.Background(), Source[string, *withSlice](src), Options{Shards: 4, PollInterval: 1 << 62})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	if d.eq == nil {
+		t.Fatal("the source's Equal method wasn't used")
+	}
+	inner.version++
+	for i, e := range inner.entries { // new pointers to equal data
+		c := *e.Value
+		inner.entries[i].Value = &c
+	}
+	if _, _, st := reload(t, d); st.shardsKept != 4 || src.calls == 0 {
+		t.Fatalf("kept %d of 4 shards, Equal called %d times", st.shardsKept, src.calls)
+	}
+}
+
+// A type embedding a ReloadSource overrides its Equal field with a method.
+type reloadWithEqualMethod struct {
+	*ReloadSource[string, int]
+	called bool
+}
+
+func (r *reloadWithEqualMethod) Equal(a, b int) bool { r.called = true; return a == b }
+
+func TestEqualMethodOverridesReloadSourceField(t *testing.T) {
+	fieldCalled := false
+	src := &reloadWithEqualMethod{ReloadSource: &ReloadSource[string, int]{
+		Dataset: "n", Key: strconv.Itoa,
+		Load:  func(context.Context) (uint64, []int, error) { return 1, []int{1}, nil },
+		Equal: func(a, b int) bool { fieldCalled = true; return a == b },
+	}}
+	eq := equalFor[string, int](src)
+	eq(1, 1)
+	if !src.called || fieldCalled {
+		t.Fatalf("method called %v, field called %v; want the method", src.called, fieldCalled)
 	}
 }

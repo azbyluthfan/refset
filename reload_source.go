@@ -33,16 +33,17 @@ import (
 //     the change itself. Read it from the primary copy of your data, never
 //     from a lagging replica or cache, or read-your-writes breaks.
 //
-// To give it a per-key fallback (a [KeyLoader], used when a read times out or
-// before an [OpenBackground] dataset is loaded), embed it in your own type
-// with a LoadKey method:
+// Set LoadKey to give it a per-key fallback, used when a read times out or
+// before an [OpenBackground] dataset is loaded, and Equal when values are
+// pointers, protobuf messages or hold slices or maps:
 //
-//	type subscriptions struct {
-//		*refset.ReloadSource[string, Subscription]
-//	}
-//
-//	func (s subscriptions) LoadKey(ctx context.Context, id string) (Subscription, bool, error) {
-//		return client.GetSubscription(ctx, id) // the per-request call
+//	src := &refset.ReloadSource[string, *pb.Subscription]{
+//		Dataset: "subscriptions",
+//		Load:    loadSubscriptions,
+//		Version: subscriptionsVersion,
+//		Key:     func(s *pb.Subscription) string { return s.UserId },
+//		Equal:   func(a, b *pb.Subscription) bool { return proto.Equal(a, b) },
+//		LoadKey: client.GetSubscription, // the per-request call
 //	}
 type ReloadSource[K comparable, V any] struct {
 	// Dataset is the dataset's name, shared with writers and version headers.
@@ -75,9 +76,30 @@ type ReloadSource[K comparable, V any] struct {
 	// without it. Set it for anything else: structs with slices or maps, and
 	// pointers, which == compares by address, so two loads of the same data
 	// never match. For protobuf messages, use proto.Equal. A value Equal
-	// reports as unchanged keeps its previous copy.
+	// reports as unchanged keeps its previous copy. (A Source of your own
+	// implements Equaler instead.)
 	Equal func(a, b V) bool
+
+	// LoadKey, if set, returns one key's current value, for reads that can't
+	// wait for the dataset: a version wait that times out, or a version-aware
+	// read before an OpenBackground dataset is loaded. It is usually the
+	// per-request call the application made before it had refset. Optional;
+	// it follows the KeyLoader rules, and Options.MaxConcurrentFallbacks caps
+	// how many calls run at once.
+	LoadKey func(ctx context.Context, key K) (V, bool, error)
 }
+
+func (s *ReloadSource[K, V]) loadKeyFunc() func(ctx context.Context, key K) (V, bool, error) {
+	if s == nil {
+		return nil
+	}
+	return s.LoadKey
+}
+
+// loadKeyFunc adapts ReloadSource.LoadKey to KeyLoader.
+type loadKeyFunc[K comparable, V any] func(ctx context.Context, key K) (V, bool, error)
+
+func (f loadKeyFunc[K, V]) LoadKey(ctx context.Context, key K) (V, bool, error) { return f(ctx, key) }
 
 func (s *ReloadSource[K, V]) equalFunc() func(a, b V) bool {
 	if s == nil {

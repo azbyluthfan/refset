@@ -118,8 +118,7 @@ func Open[K comparable, V any](ctx context.Context, src Source[K, V], opts Optio
 //   - Get returns the zero value and false for every key, and Snapshot is
 //     empty. Check Ready or Loaded first, or use the reads below.
 //   - GetForRequest and GetAtLeast don't wait: they call the source's
-//     KeyLoader, or return ErrNotLoaded if it has none. A ReloadSource gets
-//     one by embedding (see ReloadSource).
+//     KeyLoader (ReloadSource.LoadKey), or return ErrNotLoaded if it has none.
 //   - GetFresh returns an error wrapping both ErrTooStale and ErrNotLoaded.
 //   - SnapshotFile.Save refuses the empty snapshot, so it can't replace a
 //     good file.
@@ -183,10 +182,18 @@ func newDataset[K comparable, V any](src Source[K, V], opts Options) (*Dataset[K
 	d.log = cfg.log.With("dataset", d.name)
 	if cfg.reconcile && d.eq == nil && holdsKind(reflect.TypeFor[V](), isIndirect) {
 		d.log.Warn("refset: Reconcile compares values that hold pointers with reflect.DeepEqual, which also compares unexported internal state; " +
-			"for values such as protobuf messages, set ReloadSource.Equal (proto.Equal) or Reconcile may report divergences that aren't there")
+			"for values such as protobuf messages, give the source an Equal (ReloadSource.Equal, or an Equal method; proto.Equal for protobuf) or Reconcile may report divergences that aren't there")
 	}
+	// A method on the source itself comes first: it is also how a type that
+	// embeds a ReloadSource overrides the embedded LoadKey field.
 	if kl, ok := caps.(KeyLoader[K, V]); ok {
 		d.loader = kl
+	} else if s, ok := caps.(interface {
+		loadKeyFunc() func(ctx context.Context, key K) (V, bool, error)
+	}); ok {
+		if f := s.loadKeyFunc(); f != nil {
+			d.loader = loadKeyFunc[K, V](f)
+		}
 	}
 	return d, nil
 }

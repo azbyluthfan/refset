@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Added
+
+- **`ReloadSource.LoadKey`**: a per-key fallback for a `ReloadSource`, used when a read times out and before an `OpenBackground` dataset is loaded. Set it to the per-request call the application already has; no wrapper type needed. A type that embeds a `ReloadSource` and defines a `LoadKey` method keeps working, and its method wins.
+- **`Equaler`**: any `Source` can implement `Equal(a, b V) bool` to compare its values, for diffed reloads and `Options.Reconcile`. Until now only `ReloadSource` could supply one (its `Equal` field), so a custom source with pointer or protobuf values had every reload rebuild the dataset and `Reconcile` fall back to `reflect.DeepEqual`. The `Open` warning about `Reconcile` names both ways.
+
 ### Fixed
 
 - **`Stats` counters no longer run ahead of the data they describe.** `Applies`, `Reloads`, `Reconciles`, `Divergences` and the copy counters were counted just before the refresh's new version was installed, and `Panics` just before `PollErrors`. Code that waited for a counter and then read the dataset could see the old version: this caused four flaky tests here, and could mislead an application or test watching `Stats`. They are now recorded once the version is served and confirmed; the `Stats` docs state the ordering.
