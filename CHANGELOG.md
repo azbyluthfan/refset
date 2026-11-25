@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-25
+
+`ReloadSource.LoadKey` and the `Equaler` interface: a per-key fallback and a value comparison for any source, without wrapper types. `Stats` counters now move only after the data they describe is visible. No API removed.
+
+### Upgrading
+
+- **Nothing to change.** Both additions are optional. A type that embeds a `ReloadSource` and defines `LoadKey` or `Equal` keeps working: its method wins over the new field.
+- **To simplify:** a wrapper type that only added `LoadKey` to a `ReloadSource` can become the `LoadKey` field. A custom `Source` with pointer or protobuf values can implement `Equal` (with `proto.Equal` for protobuf) to keep diffed reloads and accurate `Reconcile` counts.
+- **If you wait on `Stats` counters** and then read the dataset, the read now sees the new version; you can drop any extra waiting you added for it.
+
 ### Added
 
 - **`ReloadSource.LoadKey`**: a per-key fallback for a `ReloadSource`, used when a read times out and before an `OpenBackground` dataset is loaded. Set it to the per-request call the application already has; no wrapper type needed. A type that embeds a `ReloadSource` and defines a `LoadKey` method keeps working, and its method wins.
