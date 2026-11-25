@@ -35,13 +35,16 @@ func TestReloadCounterFollowsTheData(t *testing.T) {
 	src.set(map[string]int{"a": 1})
 	d := openList(t, src, 0)
 	src.set(map[string]int{"a": 2})
-	confirmedBefore := d.lastConfirmed.Load().MonoNanos
+	// Each refresh stores a new Reading. Compare the pointer, not the time:
+	// on a coarse clock (Windows) Open and this refresh can read the same
+	// instant.
+	confirmedBefore := d.lastConfirmed.Load()
 	d.kick <- struct{}{}
 	waitFor(t, "reload counted", func() bool { return d.Stats().Reloads == 1 })
 	if v, _ := d.Get("a"); v != 2 || d.Version() != src.version {
 		t.Fatalf("Reloads moved before the data: a = %d at version %d", v, d.Version())
 	}
-	if d.lastConfirmed.Load().MonoNanos == confirmedBefore {
+	if d.lastConfirmed.Load() == confirmedBefore {
 		t.Fatal("Reloads moved before the confirmed time")
 	}
 }
