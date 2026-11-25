@@ -34,6 +34,13 @@ type Stats struct {
 }
 
 // Stats returns a point-in-time description of the dataset.
+//
+// Each field is read separately, so one call can mix moments. But a counter
+// for a refresh's result moves only once that result is visible: when Applies,
+// Reloads, Reconciles or Divergences has moved, Get serves the version that
+// refresh installed and GetFresh counts it as confirmed; when Panics has
+// moved, PollErrors already counts that failed poll. Polls counts refreshes
+// as they start.
 func (d *Dataset[K, V]) Stats() Stats {
 	r := d.root.Load()
 	d.mu.Lock()

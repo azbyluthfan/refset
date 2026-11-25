@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Stats` counters no longer run ahead of the data they describe.** `Applies`, `Reloads`, `Reconciles`, `Divergences` and the copy counters were counted just before the refresh's new version was installed, and `Panics` just before `PollErrors`. Code that waited for a counter and then read the dataset could see the old version: this caused four flaky tests here, and could mislead an application or test watching `Stats`. They are now recorded once the version is served and confirmed; the `Stats` docs state the ordering.
+
 ## [0.4.0] - 2026-11-17
 
 Starting without the source: `OpenBackground` lets a service start while its source is down, serving through its `KeyLoader` until the first load succeeds. Removes `GetCtx`. Reads, changes and reloads perform as in v0.3.1 ([benchmarks](docs/benchmarks.md)).
