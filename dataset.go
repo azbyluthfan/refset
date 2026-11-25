@@ -68,6 +68,7 @@ type Dataset[K comparable, V any] struct {
 	fromFile      atomic.Bool  // started from a snapshot file and not yet caught up
 	lastAhead     atomic.Int64 // monotonic time a poll last answered ErrVersionAhead; 0 never
 	panics        atomic.Uint64
+	afterFetch    atomic.Pointer[func()] // tests only: runs between a refresh's fetch and its result
 	_             cacheLinePad
 
 	// Written by waiting reads and the loop under mu.
@@ -687,8 +688,8 @@ func (d *Dataset[K, V]) refresh(full bool) bool {
 	d.polls.Add(1)
 	cur := d.root.Load()
 	next, head, c, err := d.safeFetch(cur, full)
-	if testHookAfterFetch != nil {
-		testHookAfterFetch()
+	if f := d.afterFetch.Load(); f != nil {
+		(*f)()
 	}
 	// Counters are recorded after what they describe is visible, so code
 	// that sees one move (a test, or an application watching Stats) also
@@ -758,10 +759,6 @@ func (d *Dataset[K, V]) record(c pollCounts) {
 		d.reconciles.Add(1)                    // after Divergences, which waiting on it should see
 	}
 }
-
-// testHookAfterFetch, if set by a test, runs between a refresh's fetch and
-// recording its result.
-var testHookAfterFetch func()
 
 func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], head uint64, c pollCounts, err error) {
 	if !full {
