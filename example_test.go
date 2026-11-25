@@ -223,7 +223,9 @@ func ExampleOptions_reconcile() {
 		time.Sleep(time.Millisecond)
 	}
 	clock.Advance(10 * time.Minute) // the periodic reload runs
-	for plans.Stats().Reconciles == 0 {
+	// Wait until it has finished: the loop re-arms its timers only after the
+	// reload has been installed.
+	for plans.Stats().Reconciles == 0 || clock.Timers() < 2 {
 		time.Sleep(time.Millisecond)
 	}
 	p, _ := plans.Get("user-1")
