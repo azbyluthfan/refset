@@ -220,14 +220,20 @@ func newRoot[K comparable, V any](version uint64, l layout, shards []map[K]V) *r
 }
 
 // equalFor returns how a reload compares values to keep unchanged shards:
-// the source's own function if it offers one (ReloadSource.Equal), else ==
-// when == compares V's contents, else nil, which turns diffing off.
+// the source's own function if it offers one (an Equal method, or
+// ReloadSource.Equal), else == when == compares V's contents, else nil, which
+// turns diffing off.
 //
 // == compares contents only when V holds no references. On a pointer or a
 // channel it compares identity, so two loads of the same data never match;
 // on an interface it compares what the interface points to, and panics if
 // that is uncomparable; slices, maps and funcs have no ==.
 func equalFor[K comparable, V any](src Source[K, V]) func(a, b V) bool {
+	// A method on the source itself comes first: it is also how a type that
+	// embeds a ReloadSource overrides the embedded Equal field.
+	if e, ok := src.(Equaler[V]); ok {
+		return e.Equal
+	}
 	if s, ok := src.(interface{ equalFunc() func(a, b V) bool }); ok {
 		if f := s.equalFunc(); f != nil {
 			return f

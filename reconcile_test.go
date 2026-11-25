@@ -219,3 +219,33 @@ func (s *syncBuffer) String() string {
 	defer s.mu.Unlock()
 	return s.b.String()
 }
+
+// freshPointersEqual is a custom source with new pointers on every load and
+// an Equal method: Reconcile compares with it, and Open doesn't warn.
+type freshPointersEqual struct {
+	freshPointers
+}
+
+func (freshPointersEqual) Equal(a, b *plan) bool { return *a == *b }
+
+func TestReconcileUsesSourceEqualMethod(t *testing.T) {
+	mem := refsettest.NewMemSource[string, *plan]("plans")
+	mem.Upsert("basic", &plan{"Basic", 10})
+	var logs syncBuffer
+	d, reload := reconcileFixtureLog(t, refset.Source[string, *plan](freshPointersEqual{freshPointers{mem}}),
+		slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	if strings.Contains(logs.String(), "Reconcile compares") {
+		t.Errorf("warned although the source has an Equal method; log:\n%s", logs.String())
+	}
+	reload()
+	if st := d.Stats(); st.Divergences != 0 || st.ShardsKept == 0 {
+		t.Fatalf("unchanged data in new pointers: Divergences %d, ShardsKept %d; want 0 and some kept", st.Divergences, st.ShardsKept)
+	}
+	state := mem.State()
+	state["basic"] = &plan{"Basic", 12}
+	mem.Restore(mem.Head(), state)
+	reload()
+	if st := d.Stats(); st.Divergences != 1 {
+		t.Fatalf("after an unlogged change: Divergences %d, want 1", st.Divergences)
+	}
+}

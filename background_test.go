@@ -292,3 +292,58 @@ func TestOpenBackgroundRejectsBadArguments(t *testing.T) {
 		t.Error("invalid options accepted")
 	}
 }
+
+// ReloadSource.LoadKey is the fallback, with no wrapper type.
+func TestReloadSourceLoadKeyField(t *testing.T) {
+	var calls atomic.Int64
+	src := &refset.ReloadSource[string, int]{
+		Dataset: "plans",
+		Load:    func(context.Context) (uint64, []int, error) { return 0, nil, errDown },
+		Key:     func(v int) string { return "k" },
+		LoadKey: func(_ context.Context, key string) (int, bool, error) {
+			calls.Add(1)
+			return 7, key == "a", nil
+		},
+	}
+	clock := newClock()
+	d := openBackground(t, refset.Source[string, int](src), refset.Options{Clock: clock, PollInterval: time.Hour})
+	eventually(t, "first attempt failed", func() bool { return clock.Timers() == 1 })
+	v, ok, err := d.GetForRequest(context.Background(), "a")
+	if err != nil || !ok || v != 7 || calls.Load() != 1 {
+		t.Fatalf("GetForRequest: %d, %v, %v after %d LoadKey calls; want 7 from LoadKey", v, ok, err, calls.Load())
+	}
+
+	// Without LoadKey there is no fallback.
+	src2 := &refset.ReloadSource[string, int]{Dataset: "plans", Key: src.Key, Load: src.Load}
+	clock2 := newClock()
+	d2 := openBackground(t, refset.Source[string, int](src2), refset.Options{Clock: clock2, PollInterval: time.Hour})
+	eventually(t, "first attempt failed", func() bool { return clock2.Timers() == 1 })
+	if _, _, err := d2.GetForRequest(context.Background(), "a"); !errors.Is(err, refset.ErrNotLoaded) {
+		t.Fatalf("without LoadKey: %v, want ErrNotLoaded", err)
+	}
+}
+
+// A type embedding a ReloadSource overrides its LoadKey field with a method,
+// as it did before the field existed.
+type reloadWithLoadKeyMethod struct {
+	*refset.ReloadSource[string, int]
+}
+
+func (reloadWithLoadKeyMethod) LoadKey(context.Context, string) (int, bool, error) {
+	return 9, true, nil
+}
+
+func TestLoadKeyMethodOverridesReloadSourceField(t *testing.T) {
+	src := reloadWithLoadKeyMethod{&refset.ReloadSource[string, int]{
+		Dataset: "plans",
+		Load:    func(context.Context) (uint64, []int, error) { return 0, nil, errDown },
+		Key:     func(int) string { return "k" },
+		LoadKey: func(context.Context, string) (int, bool, error) { return 1, true, nil },
+	}}
+	clock := newClock()
+	d := openBackground(t, refset.Source[string, int](src), refset.Options{Clock: clock, PollInterval: time.Hour})
+	eventually(t, "first attempt failed", func() bool { return clock.Timers() == 1 })
+	if v, _, err := d.GetForRequest(context.Background(), "a"); err != nil || v != 9 {
+		t.Fatalf("got %d, %v; want 9 from the method", v, err)
+	}
+}

@@ -90,6 +90,13 @@ type Source[K comparable, V any] interface {
 type KeyLoader[K comparable, V any] interface {
     LoadKey(ctx context.Context, key K) (V, bool, error)
 }
+
+// Optional. Implemented by sources whose values need their own comparison
+// (pointers, protobuf messages, values holding slices or maps), for diffed
+// reloads and the reconcile check.
+type Equaler[V any] interface {
+    Equal(a, b V) bool
+}
 ```
 
 | # | Requirement | Supports |
@@ -111,7 +118,7 @@ Why the source owns the name: `GetForRequest` must pick its dataset's entry out 
 - **Poll-now requests are coalesced.** At most one `Changes` call is in flight, plus at most one queued follow-up. Every poll has a sequence number and records when it started. Any number of poll-now requests arriving while a poll is in flight share the single follow-up. So N concurrent requests cause at most two source calls, not N.
 - Each successful `Changes` result is applied as one batch ending at `head`. The applied version can jump by more than one, but every applied version is one the source actually committed; it never skips a change and never goes backwards. G1 holds for every version a replica exposes.
 - Deltas with `version ≤ applied` are ignored (duplicate delivery is harmless).
-- On `ErrSnapshotRequired`, the replica reloads a full snapshot in the background. The old snapshot keeps serving reads until the new one swaps in. Shard maps are created at their expected size. When values can be compared (`==` for values holding no pointers, interfaces, channels, slices or maps, or `ReloadSource.Equal`), a shard whose entries all came back unchanged is kept from the old version instead of rebuilt, so a reload that changes little allocates little; otherwise memory briefly holds two copies.
+- On `ErrSnapshotRequired`, the replica reloads a full snapshot in the background. The old snapshot keeps serving reads until the new one swaps in. Shard maps are created at their expected size. When values can be compared (`==` for values holding no pointers, interfaces, channels, slices or maps, or the source's `Equal`: an `Equaler` method or `ReloadSource.Equal`), a shard whose entries all came back unchanged is kept from the old version instead of rebuilt, so a reload that changes little allocates little; otherwise memory briefly holds two copies.
 - On other errors, the loop retries with backoff; reads continue from memory and staleness grows (§4.6).
 
 ### 4.4 Startup and restarts
@@ -267,6 +274,8 @@ func (d *Dataset[K, V]) Close() error
 
 type Source[K comparable, V any] interface { /* §4.2 */ }
 type KeyLoader[K comparable, V any] interface { /* §4.2, optional */ }
+type Equaler[V any] interface { /* §4.2, optional */ }
+// ReloadSource offers both as fields: LoadKey and Equal.
 
 type Delta[K comparable, V any] struct {
     Version uint64
@@ -640,7 +649,7 @@ Every push and pull request: lint (golangci-lint with gosec, the zero-requires c
 
 ## 9. Roadmap
 
-Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of latency, GC and memory (`bench/perfreport`); automatic shard sizing, an adaptive batch window, and pre-sized, diffed reloads (v0.2); the reconcile check, `SnapshotFile`, panic recovery, the fallback cap, rate-limited forged-version polls, the `GOMEMLIMIT` rule and platform coverage (v0.3); comparing pointer values by content (v0.3.1); `OpenBackground` for starting while the source is down (v0.4). Investigated and not adopted: a single-hash shard table and pointer-free storage. Open: measuring real-source costs with Postgres, dedicated-machine benchmarks, real suspend tests, change notification, `Options.Equal` for custom sources, and the ecosystem items (metrics adapters, more example sources, gRPC helpers, promoting `pgsource` to `refsetpg`) when there is demand.
+Kept current in [roadmap.md](roadmap.md). Done after v0.1: measurement of latency, GC and memory (`bench/perfreport`); automatic shard sizing, an adaptive batch window, and pre-sized, diffed reloads (v0.2); the reconcile check, `SnapshotFile`, panic recovery, the fallback cap, rate-limited forged-version polls, the `GOMEMLIMIT` rule and platform coverage (v0.3); comparing pointer values by content (v0.3.1); `OpenBackground` for starting while the source is down (v0.4). Investigated and not adopted: a single-hash shard table and pointer-free storage. Open: measuring real-source costs with Postgres, dedicated-machine benchmarks, real suspend tests, change notification, and the ecosystem items (metrics adapters, more example sources, gRPC helpers, promoting `pgsource` to `refsetpg`) when there is demand.
 
 ## 10. Risks and Open Questions
 

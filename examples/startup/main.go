@@ -10,7 +10,7 @@
 //     Ready, so a normal start would be fully loaded before serving;
 //
 //  2. starts anyway when that times out: GetForRequest sends each lookup to
-//     the per-key endpoint, through the source's KeyLoader;
+//     the per-key endpoint, set as the ReloadSource's LoadKey;
 //
 //  3. serves locally once a background retry loads the dataset.
 //
@@ -77,21 +77,6 @@ func (s *SubscriptionService) Get(_ context.Context, userID string) (Subscriptio
 	return sub, ok, nil
 }
 
-// source is a ReloadSource with a KeyLoader: until the dataset is loaded,
-// GetForRequest and GetAtLeast ask the per-key endpoint instead. Embedding
-// keeps everything ReloadSource does, including Equal.
-type source struct {
-	*refset.ReloadSource[string, Subscription]
-	svc *SubscriptionService
-}
-
-// LoadKey implements refset.KeyLoader. refset caps how many run at once
-// (Options.MaxConcurrentFallbacks, 32 by default), so an outage can't flood
-// the per-key endpoint.
-func (s source) LoadKey(ctx context.Context, userID string) (Subscription, bool, error) {
-	return s.svc.Get(ctx, userID)
-}
-
 func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)
@@ -107,12 +92,17 @@ func run() error {
 	svc.bulkDown.Store(true)
 	fmt.Println("subscription service: bulk endpoint down")
 
-	src := source{svc: svc, ReloadSource: &refset.ReloadSource[string, Subscription]{
+	src := &refset.ReloadSource[string, Subscription]{
 		Dataset: "subscriptions",
 		Load:    svc.ListAll,
 		Version: svc.Version,
 		Key:     func(s Subscription) string { return s.UserID },
-	}}
+		// Until the dataset is loaded, GetForRequest and GetAtLeast ask the
+		// per-key endpoint instead. refset caps how many of these calls run
+		// at once (Options.MaxConcurrentFallbacks, 32 by default), so an
+		// outage can't flood it.
+		LoadKey: svc.Get,
+	}
 	subs, err := refset.OpenBackground(src, refset.Options{PollInterval: time.Second})
 	if err != nil {
 		return err // invalid options; an unreachable source is never an error here

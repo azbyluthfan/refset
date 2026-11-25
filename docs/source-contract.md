@@ -29,9 +29,18 @@ type Source[K comparable, V any] interface {
 }
 
 // Optional. If the source implements it, the dataset uses it as the fallback
-// when a version wait times out.
+// when a version wait times out, and for version-aware reads before an
+// OpenBackground dataset is loaded. (ReloadSource: the LoadKey field.)
 type KeyLoader[K comparable, V any] interface {
     LoadKey(ctx context.Context, key K) (value V, ok bool, err error)
+}
+
+// Optional. If the source implements it, full reloads keep the shards whose
+// values Equal reports unchanged, and Options.Reconcile compares with it.
+// Implement it when values are pointers, protobuf messages (proto.Equal), or
+// hold slices or maps. (ReloadSource: the Equal field.)
+type Equaler[V any] interface {
+    Equal(a, b V) bool
 }
 
 type Delta[K comparable, V any] struct {

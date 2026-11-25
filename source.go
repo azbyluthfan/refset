@@ -37,13 +37,33 @@ type Source[K comparable, V any] interface {
 
 // KeyLoader is an optional interface for a [Source]. If the source implements
 // it, a version wait that times out falls back to LoadKey instead of returning
-// [ErrNotCaughtUp].
+// [ErrNotCaughtUp], and so do version-aware reads before an [OpenBackground]
+// dataset is loaded. [ReloadSource] takes the same function as its LoadKey
+// field.
 //
 // LoadKey must return the source's current value for key, at a version at
 // least as new as any version the source has reported. It is called from
 // request goroutines and must be safe for concurrent use.
 type KeyLoader[K comparable, V any] interface {
 	LoadKey(ctx context.Context, key K) (value V, ok bool, err error)
+}
+
+// Equaler is an optional interface for a [Source] whose values need their own
+// comparison. If the source implements it, a full reload keeps the shards
+// whose values Equal reports unchanged instead of rebuilding them, and
+// Options.Reconcile compares values with it. [ReloadSource] takes the same
+// function as its Equal field.
+//
+// Without it, values are compared with == when that compares their contents
+// (they hold no pointers, interfaces, channels, slices, maps or funcs).
+// Otherwise reloads rebuild every shard and Reconcile uses reflect.DeepEqual,
+// which also compares unexported state such as a protobuf message's internal
+// fields. For pointers and protobuf messages, implement it: for protobuf,
+// return proto.Equal(a, b).
+//
+// Equal must be safe for concurrent use and must not modify its arguments.
+type Equaler[V any] interface {
+	Equal(a, b V) bool
 }
 
 // Delta is one or more committed changes, tagged with the version they bring
