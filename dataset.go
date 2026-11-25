@@ -251,6 +251,10 @@ func (d *Dataset[K, V]) loadInBackground() {
 			return
 		}
 		d.pollErrors.Add(1)
+		var p *PanicError
+		if errors.As(err, &p) {
+			d.panics.Add(1)
+		}
 		wait := jitter(delay)
 		d.log.Warn("refset: background load failed; serving nothing locally until it succeeds",
 			"attempt", attempt, "retry_in", wait, "err", err)
@@ -293,10 +297,9 @@ func (d *Dataset[K, V]) openLoad(ctx context.Context) (r *root[K, V], fromFile b
 func (d *Dataset[K, V]) firstLoad(ctx context.Context) (r *root[K, V], err error) {
 	defer func() {
 		if p := recovered(recover()); p != nil {
-			d.panics.Add(1)
 			d.log.Error("refset: panic in source code during the background load",
 				"panic", p.Value, "stack", string(p.Stack))
-			r, err = nil, p
+			r, err = nil, p // counted by loadInBackground, after PollErrors
 		}
 	}()
 	r, _, err = d.load(ctx, nil)
@@ -683,11 +686,21 @@ func (d *Dataset[K, V]) refresh(full bool) bool {
 	start := d.cfg.clock.Now()
 	d.polls.Add(1)
 	cur := d.root.Load()
-	next, head, reloaded, err := d.safeFetch(cur, full)
+	next, head, c, err := d.safeFetch(cur, full)
+	if testHookAfterFetch != nil {
+		testHookAfterFetch()
+	}
+	// Counters are recorded after what they describe is visible, so code
+	// that sees one move (a test, or an application watching Stats) also
+	// sees its result: the new version, or the failure.
 	if err != nil {
 		if d.ctx.Err() == nil {
 			d.pollErrors.Add(1)
 			d.log.Warn("refset: refresh failed", "err", err, "applied", cur.version)
+		}
+		var p *PanicError
+		if errors.As(err, &p) {
+			d.panics.Add(1) // after PollErrors: a panic is also a failed poll
 		}
 		d.finish(seq, 0, false)
 		return false
@@ -696,13 +709,14 @@ func (d *Dataset[K, V]) refresh(full bool) bool {
 		d.root.Store(next)
 		d.lastApply.Store(d.cfg.clock.Now().WallNanos)
 	}
-	if reloaded {
+	if c.reloaded {
 		d.knownHead.Store(head) // a reload may legitimately lower it (history reset)
 	} else {
 		d.raiseHead(head)
 	}
 	d.lastConfirmed.Store(&start)
 	d.fromFile.Store(false)
+	d.record(c)
 	d.finish(seq, head, true)
 	return true
 }
@@ -710,19 +724,46 @@ func (d *Dataset[K, V]) refresh(full bool) bool {
 // safeFetch is fetch with a panic in source code (Changes, LoadSnapshot,
 // Equal, a ReloadSource's functions) recovered and returned as a
 // *PanicError: the poll fails and the dataset keeps its last version.
-func (d *Dataset[K, V]) safeFetch(cur *root[K, V], full bool) (next *root[K, V], head uint64, reloaded bool, err error) {
+func (d *Dataset[K, V]) safeFetch(cur *root[K, V], full bool) (next *root[K, V], head uint64, c pollCounts, err error) {
 	defer func() {
 		if p := recovered(recover()); p != nil {
-			d.panics.Add(1)
 			d.log.Error("refset: panic in source code; the poll failed and the dataset keeps its last version",
 				"panic", p.Value, "stack", string(p.Stack))
-			next, head, reloaded, err = nil, 0, false, p
+			next, head, c, err = nil, 0, pollCounts{}, p // counted by refresh
 		}
 	}()
 	return d.fetch(cur, full)
 }
 
-func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], head uint64, reloaded bool, err error) {
+// pollCounts are the Stats a successful refresh adds. fetch returns them and
+// refresh records them once the new version is installed.
+type pollCounts struct {
+	applied    bool // a batch of changes was applied
+	reloaded   bool // a full snapshot was loaded
+	reconciled bool
+	divergent  int
+	copies     copyStats
+}
+
+func (d *Dataset[K, V]) record(c pollCounts) {
+	if c.applied {
+		d.applies.Add(1)
+	}
+	if c.reloaded {
+		d.reloads.Add(1)
+	}
+	d.recordCopies(c.copies)
+	if c.reconciled {
+		d.divergences.Add(uint64(c.divergent)) //nolint:gosec // a count, never negative
+		d.reconciles.Add(1)                    // after Divergences, which waiting on it should see
+	}
+}
+
+// testHookAfterFetch, if set by a test, runs between a refresh's fetch and
+// recording its result.
+var testHookAfterFetch func()
+
+func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], head uint64, c pollCounts, err error) {
 	if !full {
 		var deltas []Delta[K, V]
 		head, deltas, err = d.src.Changes(d.ctx, cur.version)
@@ -735,30 +776,26 @@ func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], hea
 		case errors.Is(err, ErrSnapshotRequired):
 			d.log.Info("refset: source requires a full snapshot", "applied", cur.version)
 		case err != nil:
-			return nil, 0, false, err
+			return nil, 0, c, err
 		default:
 			if err := checkChanges(d.name, cur.version, head, deltas); err != nil {
-				return nil, 0, false, err
+				return nil, 0, c, err
 			}
 			if head == cur.version {
-				return cur, head, false, nil
+				return cur, head, c, nil
 			}
 			next, st := applyDeltas(cur, head, deltas)
-			d.applies.Add(1)
-			d.recordCopies(st)
-			return next, head, false, nil
+			return next, head, pollCounts{applied: true, copies: st}, nil
 		}
 	}
 	next, st, err := d.load(d.ctx, cur)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, 0, c, err
 	}
-	d.reloads.Add(1)
-	d.recordCopies(st)
+	c = pollCounts{reloaded: true, copies: st}
 	if full && d.cfg.reconcile {
 		if n, ok := d.reconcile(cur, next); ok {
-			d.reconciles.Add(1)
-			d.divergences.Add(uint64(n)) //nolint:gosec // a count, never negative
+			c.reconciled, c.divergent = true, n
 			if n > 0 {
 				d.log.Warn("refset: reconcile found entries that differ from the source without a reported change; the source's change feed missed them",
 					"count", n, "applied", cur.version, "reloaded", next.version)
@@ -769,7 +806,7 @@ func (d *Dataset[K, V]) fetch(cur *root[K, V], full bool) (next *root[K, V], hea
 		d.log.Warn("refset: source history went backwards; reloaded at an older version",
 			"applied", cur.version, "reloaded", next.version)
 	}
-	return next, next.version, true, nil
+	return next, next.version, c, nil
 }
 
 func (d *Dataset[K, V]) recordCopies(st copyStats) {
