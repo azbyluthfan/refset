@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,10 +26,22 @@ import (
 // interval (default 1m) writes pause, faults heal, and every replica must
 // reach the source's version with identical contents. It also watches for
 // goroutine and heap growth across checks.
+//
+// REFSET_SOAK_SEED (default 1) seeds the writer and the chaos loop, so a run
+// with the same seed and duration replays the same fault schedule. Release
+// checks use seed 1, so their results compare across releases; the
+// scheduled weekly run uses a new seed each week to cover other schedules.
+// The seed is logged first, to replay a failure.
 func TestSoak(t *testing.T) {
 	total, err := time.ParseDuration(os.Getenv("REFSET_SOAK"))
 	if err != nil {
 		t.Skip("set REFSET_SOAK to a duration, e.g. REFSET_SOAK=1h, to run the soak test")
+	}
+	seed := uint64(1)
+	if v := os.Getenv("REFSET_SOAK_SEED"); v != "" {
+		if seed, err = strconv.ParseUint(v, 10, 64); err != nil {
+			t.Fatalf("REFSET_SOAK_SEED=%q: %v", v, err)
+		}
 	}
 	every := time.Minute
 	if v, err := time.ParseDuration(os.Getenv("REFSET_SOAK_CHECK")); err == nil {
@@ -44,6 +57,8 @@ func TestSoak(t *testing.T) {
 			}
 		}
 	}
+
+	logf("seed %d, duration %v, check every %v", seed, total, every)
 
 	src := refsettest.NewMemSource[string, plan](plansDataset)
 	opts := refset.Options{PollInterval: 100 * time.Millisecond, BatchWindow: 2 * time.Millisecond, Shards: 64}
@@ -80,7 +95,7 @@ func TestSoak(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		rng := rand.New(rand.NewPCG(1, 1))
+		rng := rand.New(rand.NewPCG(seed, seed))
 		tick := time.NewTicker(5 * time.Millisecond)
 		defer tick.Stop()
 		for {
@@ -101,7 +116,7 @@ func TestSoak(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		rng := rand.New(rand.NewPCG(2, 2))
+		rng := rand.New(rand.NewPCG(seed+1, seed+1))
 		tick := time.NewTicker(500 * time.Millisecond)
 		defer tick.Stop()
 		for {

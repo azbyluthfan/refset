@@ -1,7 +1,9 @@
 # Weekly: everything too slow for every push, and what can break without a
 # push. The jobs run side by side; the longest is the soak (about 50 min).
 #   - soak: three replicas under random partitions, dropped notifications,
-#     compactions and restarts for 45 minutes, race detector on;
+#     compactions and restarts for 45 minutes, race detector on. Scheduled
+#     runs use a new fault schedule each week (seeded by the run ID); a manual
+#     run uses seed 1, the schedule release results are compared on;
 #   - every fuzz target for 5 minutes, one job per target in parallel;
 #   - govulncheck on all three modules, which reports newly published
 #     advisories even in weeks without commits;
@@ -25,6 +27,9 @@ on:
       soak_duration:
         description: Soak duration (Go duration, e.g. 45m or 1h)
         default: 45m
+      soak_seed:
+        description: Soak seed (1 for release checks; another to replay a weekly run's schedule)
+        default: "1"
 
 permissions:
   contents: read
@@ -49,7 +54,8 @@ jobs:
       - name: Soak (race detector on)
         env:
           SOAK_DURATION: ${{ inputs.soak_duration || '45m' }}
-        run: make soak SOAK_DURATION="$SOAK_DURATION"
+          SOAK_SEED: ${{ inputs.soak_seed || github.run_id }}
+        run: make soak SOAK_DURATION="$SOAK_DURATION" SOAK_SEED="$SOAK_SEED"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

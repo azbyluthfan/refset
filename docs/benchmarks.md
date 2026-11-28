@@ -348,6 +348,6 @@ Roadmap P2 asked whether replacing each shard's Go map with a custom table would
 
 Result for v0.5.0 on 2026-11-27 (45 minutes in the weekly workflow on a GitHub-hosted `ubuntu-24.04` runner, race detector on): **45 of 45 checks matched**, over 539,794 versions (about 200 a second), 877 replica restarts and 891 compactions. Goroutines stayed at 10 during the run (8 after it stopped) and the live heap at 0.9–1.1 MiB, with no growth trend.
 
-The writer and the chaos loop use fixed random seeds, so every run replays the same fault schedule and runs of the same length are directly comparable. v0.3.0 (2026-11-14) and v0.4.0 (2026-11-17) had the same restarts and compactions, 539,775 and 539,751 versions, and the same flat heap and goroutine counts.
+The writer and the chaos loop are seeded (`REFSET_SOAK_SEED`, default 1), so runs with the same seed replay the same fault schedule and runs of the same length are directly comparable. Release results use seed 1; the scheduled weekly run picks a new seed each week to cover other schedules, and logs it so a failure can be replayed. v0.3.0 (2026-11-14) and v0.4.0 (2026-11-17) had the same restarts and compactions, 539,775 and 539,751 versions, and the same flat heap and goroutine counts.
 
 Earlier result on 2026-11-05 (one hour, same machine as above, race detector on): 60 of 60 checks matched, over 718,508 versions, 1,177 replica restarts and 1,186 forced reloads. Goroutines stayed at 10 and the live heap at 0.8–1.0 MiB.

@@ -35,7 +35,7 @@ make lint        # golangci-lint (install from https://golangci-lint.run)
 make check-deps  # fails if the library module gained a dependency
 make ci          # everything CI runs for the library
 make fuzz        # every fuzz target, 30s each (FUZZTIME=5m for longer)
-make soak        # replicas under random faults, 10 minutes (SOAK_DURATION=1h)
+make soak        # replicas under random faults, 10 minutes (SOAK_DURATION=1h, SOAK_SEED=n)
 make vulncheck   # govulncheck on the library, examples and bench modules
 make perfreport  # latency, GC and memory under load, as Markdown (about 10 minutes)
 make bench-compare  # core benchmarks: latest release vs your working tree

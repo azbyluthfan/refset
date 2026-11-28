@@ -78,10 +78,11 @@ fuzz:
 	done
 
 SOAK_DURATION ?= 10m
+SOAK_SEED ?= 1
 
-## soak: replicas under random faults for SOAK_DURATION, race detector on (log in soak.log)
+## soak: replicas under random faults for SOAK_DURATION, race detector on (log in soak.log); SOAK_SEED picks the fault schedule
 soak:
-	REFSET_SOAK=$(SOAK_DURATION) REFSET_SOAK_LOG=$(CURDIR)/soak.log \
+	REFSET_SOAK=$(SOAK_DURATION) REFSET_SOAK_SEED=$(SOAK_SEED) REFSET_SOAK_LOG=$(CURDIR)/soak.log \
 		$(GO) test -race -count=1 -run '^TestSoak$$' -timeout 3h -v ./internal/scenario/
 
 PG_URL ?= postgres://refset:refset@localhost:55432/refset?sslmode=disable
