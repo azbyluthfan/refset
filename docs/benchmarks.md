@@ -346,8 +346,8 @@ Roadmap P2 asked whether replacing each shard's Go map with a custom table would
 
 `REFSET_SOAK=1h go test -race -run TestSoak -timeout 2h ./internal/scenario/`: three replicas follow one source for an hour while a writer commits about 200 versions a second and a chaos loop partitions replicas, drops their notifications, slows them, compacts the source and restarts replicas. Every minute, faults heal and each replica must match the source exactly.
 
-Result for v0.4.0 on 2026-11-17 (45 minutes in the weekly workflow on a GitHub-hosted `ubuntu-24.04` runner, race detector on): **45 of 45 checks matched**, over 539,751 versions (about 200 a second), 877 replica restarts and 891 compactions. Goroutines stayed at 10 during the run (8 after it stopped) and the live heap at 0.9–1.1 MiB, with no growth trend.
+Result for v0.5.0 on 2026-11-27 (45 minutes in the weekly workflow on a GitHub-hosted `ubuntu-24.04` runner, race detector on): **45 of 45 checks matched**, over 539,794 versions (about 200 a second), 877 replica restarts and 891 compactions. Goroutines stayed at 10 during the run (8 after it stopped) and the live heap at 0.9–1.1 MiB, with no growth trend.
 
-The writer and the chaos loop use fixed random seeds, so every run replays the same fault schedule and runs of the same length are directly comparable. v0.3.0's run on 2026-11-14 had the same restarts and compactions, 539,775 versions and the same flat heap and goroutine counts.
+The writer and the chaos loop use fixed random seeds, so every run replays the same fault schedule and runs of the same length are directly comparable. v0.3.0 (2026-11-14) and v0.4.0 (2026-11-17) had the same restarts and compactions, 539,775 and 539,751 versions, and the same flat heap and goroutine counts.
 
 Earlier result on 2026-11-05 (one hour, same machine as above, race detector on): 60 of 60 checks matched, over 718,508 versions, 1,177 replica restarts and 1,186 forced reloads. Goroutines stayed at 10 and the live heap at 0.8–1.0 MiB.
