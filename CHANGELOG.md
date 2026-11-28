@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-11-27
+## [0.5.0] - 2026-11-28
 
 `ReloadSource.LoadKey` and the `Equaler` interface: a per-key fallback and a value comparison for any source, without wrapper types. `Stats` counters now move only after the data they describe is visible. No API removed.
 

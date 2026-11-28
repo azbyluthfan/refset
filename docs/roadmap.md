@@ -4,7 +4,7 @@ Where refset is going after the first release. The reasoning behind the design i
 
 Nothing here is a promise of dates. Items move up when users ask for them; open an issue if one matters to you.
 
-## Where things stand (2026-11-25)
+## Where things stand (2026-11-28)
 
 | Area | State |
 |---|---|
