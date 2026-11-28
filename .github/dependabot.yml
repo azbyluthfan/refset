@@ -6,6 +6,12 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # codeql-action/init and /analyze must stay on the same release:
+      # a bump of one alone fails, as #42 and #44 did.
+      codeql:
+        patterns:
+          - "github/codeql-action*"
   - package-ecosystem: gomod
     directory: /examples
     schedule:
